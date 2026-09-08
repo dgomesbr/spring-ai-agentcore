@@ -497,21 +497,11 @@ class AgentCoreSessionRepositoryTests {
 	// ==================== getEventVersion ====================
 
 	@Test
-	void getEventVersionMatchesEventCountAcrossPages() {
-		List<Event> firstPage = IntStream.range(0, 3).mapToObj((i) -> eventWithId("e" + i)).toList();
-		List<Event> secondPage = IntStream.range(3, 5).mapToObj((i) -> eventWithId("e" + i)).toList();
-		given(this.client.listEvents(any(ListEventsRequest.class)))
-			.willReturn(ListEventsResponse.builder().events(firstPage).nextToken("next").build())
-			.willReturn(ListEventsResponse.builder().events(secondPage).build());
-
-		long version = this.repository.getEventVersion(SESSION_ID);
-		assertThat(version).isEqualTo(5L);
-	}
-
-	@Test
-	void getEventVersionEmptySessionReturnsZero() {
-		this.givenDataEvents();
-		assertThat(this.repository.getEventVersion(SESSION_ID)).isEqualTo(0L);
+	void getEventVersionThrowsUnsupportedOperation() {
+		assertThatThrownBy(() -> this.repository.getEventVersion(SESSION_ID))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("getEventVersion is unsupported");
+		then(this.client).shouldHaveNoInteractions();
 	}
 
 	@Test
@@ -522,7 +512,7 @@ class AgentCoreSessionRepositoryTests {
 			.willReturn(ListEventsResponse.builder().events(firstPage).nextToken("page2").build())
 			.willReturn(ListEventsResponse.builder().events(secondPage).build());
 
-		this.repository.getEventVersion(SESSION_ID);
+		this.repository.delete(SESSION_ID);
 
 		ArgumentCaptor<ListEventsRequest> captor = ArgumentCaptor.forClass(ListEventsRequest.class);
 		then(this.client).should(times(2)).listEvents(captor.capture());

@@ -24,7 +24,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Predicate;
 
 import org.slf4j.Logger;
@@ -117,6 +116,10 @@ import org.springframework.ai.session.SessionRepository;
  * {@code EventFilter.lastN(int)}) plus long-term memory extraction, not in-place log
  * rewriting. The event log is append-only here: {@link #appendEvent(SessionEvent)} and
  * {@link #delete(String)} are the only write paths, and neither needs locking.</li>
+ * <li>{@link #getEventVersion(String)} throws {@link UnsupportedOperationException} for
+ * the same reason: its only SPI purpose is supplying the {@code expectedVersion} for the
+ * versioned {@code replaceEvents}, so a count here would suggest an optimistic-lock
+ * capability the backend does not have.</li>
  * </ul>
  *
  * <h3>Synthesized {@link Session} fields</h3> On {@link #findById(String)} we synthesize
@@ -466,23 +469,21 @@ public final class AgentCoreSessionRepository implements SessionRepository {
 		throw new UnsupportedOperationException(REPLACE_EVENTS_UNSUPPORTED);
 	}
 
+	/**
+	 * Unsupported. The version's only SPI purpose is supplying the
+	 * {@code expectedVersion} for {@link #replaceEvents(String, List, long)}, which this
+	 * repository does not support, so an event count here would suggest an
+	 * optimistic-lock capability that does not exist. Use
+	 * {@link #findEvents(String, EventFilter)} to read the log.
+	 * @param sessionId the session whose version would be computed
+	 * @return never returns
+	 * @throws UnsupportedOperationException always
+	 */
 	@Override
 	public long getEventVersion(String sessionId) {
-		validateSessionId(sessionId);
-		try {
-			var actorAndSession = this.actorAndSession(sessionId);
-			AtomicLong count = new AtomicLong();
-			this.forEachEventPage(actorAndSession, false, false, null, (page) -> {
-				count.addAndGet(page.size());
-				return true;
-			});
-			return count.get();
-		}
-		catch (SdkException ex) {
-			logger.error("Failed to compute AgentCore event version for sessionId: {}", sessionId, ex);
-			throw new AgentCoreMemoryException.RetrievalException(
-					"Failed to compute event version for sessionId: " + sessionId, ex);
-		}
+		throw new UnsupportedOperationException("getEventVersion is unsupported: its only SPI purpose is supplying"
+				+ " the expectedVersion for the versioned replaceEvents, which this repository does not support"
+				+ " (AgentCore has no compare-and-set). Use findEvents to read the log.");
 	}
 
 	/**

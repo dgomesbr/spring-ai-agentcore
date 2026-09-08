@@ -105,7 +105,7 @@ context key.
 
 **Reads and writes.** The event log is append-only: `appendEvent` and `delete` are the
 only write paths, synthetic events (framework generated, for example compaction summaries)
-are never persisted, and both `replaceEvents` variants throw
+are never persisted, and both `replaceEvents` variants and `getEventVersion` throw
 `UnsupportedOperationException` (see the table below). `findEvents` pushes
 `EventFilter.branch()` down to AgentCore and stops paginating early for plain `lastN`
 queries.
@@ -120,6 +120,7 @@ queries.
 | `findExpiredSessionIds(Instant)` | throws `UnsupportedOperationException` | Expiry is memory-level retention (`eventExpiryDuration`), not re-derivable per session; use `findByUserId(userId)` to enumerate a user's sessions. |
 | `replaceEvents(String, List)` | throws `UnsupportedOperationException` | AgentCore has no transactional replace or CAS; bound context via read-windowing (`totalEventsLimit`, `EventFilter.lastN`) and long-term memory extraction instead. |
 | `replaceEvents(String, List, long)` | throws `UnsupportedOperationException` | Same as above; the `expectedVersion` check cannot be made atomic without a server-side CAS. |
+| `getEventVersion(String)` | throws `UnsupportedOperationException` | Its only SPI purpose is supplying the `expectedVersion` for the versioned `replaceEvents`; a count would suggest an optimistic-lock capability the backend does not have. |
 | `appendEvent(SessionEvent)` | does not throw when session is unknown | First append implicitly creates the session server-side. |
 | `Session.createdAt` | `findByUserId`: real instant from each `SessionSummary`; `findById`: the tail (most recent) event timestamp, without calling `ListSessions` | Either path falls back to the `Instant.EPOCH` sentinel when its source carries no timestamp; the last-event timestamp is also exposed under metadata key `agentcore.lastEventAt`. |
 | `Session.expiresAt` | `null` | TTL is managed on the memory resource itself. |
