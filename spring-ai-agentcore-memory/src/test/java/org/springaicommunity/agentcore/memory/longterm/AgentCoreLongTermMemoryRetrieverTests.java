@@ -48,6 +48,10 @@ import static org.mockito.BDDMockito.then;
 @ExtendWith(MockitoExtension.class)
 class AgentCoreLongTermMemoryRetrieverTests {
 
+	private static final String ACTOR_NAMESPACE = "/strategies/strategy-123/actors/user-456";
+
+	private static final String SESSION_NAMESPACE = ACTOR_NAMESPACE + "/sessions/session-789";
+
 	@Mock
 	private BedrockAgentCoreClient client;
 
@@ -65,6 +69,7 @@ class AgentCoreLongTermMemoryRetrieverTests {
 			.memoryRecordId("record-1")
 			.content(MemoryContent.builder().text("User likes coffee").build())
 			.score(0.95)
+			.namespaces(ACTOR_NAMESPACE)
 			.build();
 
 		given(this.client.retrieveMemoryRecords(any(RetrieveMemoryRecordsRequest.class)))
@@ -96,6 +101,7 @@ class AgentCoreLongTermMemoryRetrieverTests {
 			.memoryRecordId("summary-1")
 			.content(MemoryContent.builder().text("Discussed travel plans").build())
 			.score(0.88)
+			.namespaces(SESSION_NAMESPACE)
 			.build();
 
 		given(this.client.retrieveMemoryRecords(any(RetrieveMemoryRecordsRequest.class)))
@@ -123,10 +129,12 @@ class AgentCoreLongTermMemoryRetrieverTests {
 		var summary1 = MemoryRecordSummary.builder()
 			.memoryRecordId("pref-1")
 			.content(MemoryContent.builder().text("Prefers dark mode").build())
+			.namespaces(ACTOR_NAMESPACE)
 			.build();
 		var summary2 = MemoryRecordSummary.builder()
 			.memoryRecordId("pref-2")
 			.content(MemoryContent.builder().text("Uses metric units").build())
+			.namespaces(ACTOR_NAMESPACE)
 			.build();
 
 		given(this.client.listMemoryRecords(any(ListMemoryRecordsRequest.class)))
@@ -168,6 +176,7 @@ class AgentCoreLongTermMemoryRetrieverTests {
 			.memoryRecordId("record-1")
 			.content((MemoryContent) null)
 			.score(null)
+			.namespaces(ACTOR_NAMESPACE)
 			.build();
 
 		given(this.client.retrieveMemoryRecords(any(RetrieveMemoryRecordsRequest.class)))
@@ -180,6 +189,137 @@ class AgentCoreLongTermMemoryRetrieverTests {
 		assertThat(records).hasSize(1);
 		assertThat(records.get(0).content()).isEmpty();
 		assertThat(records.get(0).score()).isEqualTo(0.0);
+	}
+
+	@Test
+	void shouldDropSearchResultsFromActorWhoseIdSharesThePrefix() {
+		// Given: the service matches namespaces by prefix, so user-4567 records come back
+		var own = record("own", ACTOR_NAMESPACE);
+		var otherActor = record("other", "/strategies/strategy-123/actors/user-4567");
+
+		given(this.client.retrieveMemoryRecords(any(RetrieveMemoryRecordsRequest.class)))
+			.willReturn(RetrieveMemoryRecordsResponse.builder().memoryRecordSummaries(own, otherActor).build());
+
+		// When
+		List<MemoryRecord> records = this.retriever.searchMemories("strategy-123", "user-456", "query", 5);
+
+		// Then
+		assertThat(records).extracting(MemoryRecord::id).containsExactly("own");
+	}
+
+	@Test
+	void shouldKeepActorSearchResultsFromOwnSessionNamespaces() {
+		// Given
+		var sessionRecord = record("session-record", SESSION_NAMESPACE);
+
+		given(this.client.retrieveMemoryRecords(any(RetrieveMemoryRecordsRequest.class)))
+			.willReturn(RetrieveMemoryRecordsResponse.builder().memoryRecordSummaries(sessionRecord).build());
+
+		// When
+		List<MemoryRecord> records = this.retriever.searchMemories("strategy-123", "user-456", "query", 5);
+
+		// Then
+		assertThat(records).extracting(MemoryRecord::id).containsExactly("session-record");
+	}
+
+	@Test
+	void shouldDropSearchResultsFromSessionWhoseIdSharesThePrefix() {
+		// Given
+		var own = record("own", SESSION_NAMESPACE);
+		var otherSession = record("other", SESSION_NAMESPACE + "0");
+
+		given(this.client.retrieveMemoryRecords(any(RetrieveMemoryRecordsRequest.class)))
+			.willReturn(RetrieveMemoryRecordsResponse.builder().memoryRecordSummaries(own, otherSession).build());
+
+		// When
+		List<MemoryRecord> records = this.retriever.searchMemories("strategy-123", "user-456", "session-789", "query",
+				5, AgentCoreLongTermMemoryNamespace.SESSION.getPattern());
+
+		// Then
+		assertThat(records).extracting(MemoryRecord::id).containsExactly("own");
+	}
+
+	@Test
+	void shouldDropListedRecordsFromActorWhoseIdSharesThePrefix() {
+		// Given
+		var own = record("own", ACTOR_NAMESPACE);
+		var otherActor = record("other", "/strategies/strategy-123/actors/user-456-admin");
+
+		given(this.client.listMemoryRecords(any(ListMemoryRecordsRequest.class)))
+			.willReturn(ListMemoryRecordsResponse.builder().memoryRecordSummaries(own, otherActor).build());
+
+		// When
+		List<MemoryRecord> records = this.retriever.listMemories("strategy-123", "user-456",
+				AgentCoreLongTermMemoryNamespace.ACTOR.getPattern());
+
+		// Then
+		assertThat(records).extracting(MemoryRecord::id).containsExactly("own");
+	}
+
+	@Test
+	void shouldKeepRecordWhenAnyOfItsNamespacesIsInScope() {
+		// Given
+		var shared = record("shared", "/strategies/strategy-123/actors/user-4567", ACTOR_NAMESPACE);
+
+		given(this.client.retrieveMemoryRecords(any(RetrieveMemoryRecordsRequest.class)))
+			.willReturn(RetrieveMemoryRecordsResponse.builder().memoryRecordSummaries(shared).build());
+
+		// When
+		List<MemoryRecord> records = this.retriever.searchMemories("strategy-123", "user-456", "query", 5);
+
+		// Then
+		assertThat(records).extracting(MemoryRecord::id).containsExactly("shared");
+	}
+
+	@Test
+	void shouldDropRecordsWithoutNamespaces() {
+		// Given
+		var unscoped = MemoryRecordSummary.builder()
+			.memoryRecordId("unscoped")
+			.content(MemoryContent.builder().text("no namespace").build())
+			.build();
+
+		given(this.client.retrieveMemoryRecords(any(RetrieveMemoryRecordsRequest.class)))
+			.willReturn(RetrieveMemoryRecordsResponse.builder().memoryRecordSummaries(unscoped).build());
+
+		// When
+		List<MemoryRecord> records = this.retriever.searchMemories("strategy-123", "user-456", "query", 5);
+
+		// Then
+		assertThat(records).isEmpty();
+	}
+
+	@Test
+	void shouldRejectActorIdWithSlashBeforeCallingService() {
+		// "user-456/x" would resolve beneath actor "user-456" and pass the namespace
+		// filter
+		Assertions.assertThatThrownBy(() -> this.retriever.searchMemories("strategy-123", "user-456/x", "query", 5))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("actorId");
+		Assertions
+			.assertThatThrownBy(() -> this.retriever.listMemories("strategy-123", "user-456/x",
+					AgentCoreLongTermMemoryNamespace.ACTOR.getPattern()))
+			.isInstanceOf(IllegalArgumentException.class);
+
+		then(this.client).shouldHaveNoInteractions();
+	}
+
+	@Test
+	void shouldRejectActorIdWithWildcardBeforeCallingService() {
+		Assertions.assertThatThrownBy(() -> this.retriever.searchMemories("strategy-123", "*", "query", 5))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("actorId");
+
+		then(this.client).shouldHaveNoInteractions();
+	}
+
+	private static MemoryRecordSummary record(String id, String... namespaces) {
+		return MemoryRecordSummary.builder()
+			.memoryRecordId(id)
+			.content(MemoryContent.builder().text(id).build())
+			.score(0.5)
+			.namespaces(namespaces)
+			.build();
 	}
 
 }
