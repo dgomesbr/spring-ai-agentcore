@@ -34,6 +34,12 @@ import software.amazon.awssdk.services.bedrockagentcore.model.SearchCriteria;
  * Retriever for long-term memories from AgentCore Memory. Supports semantic search
  * (facts, summaries, episodes) and listing (preferences).
  *
+ * <p>
+ * AgentCore Memory matches the request namespace as a plain string prefix, so a request
+ * for actor {@code alice} also returns records stored under actor {@code alice2}. Results
+ * are therefore filtered client-side to records whose namespace equals the requested
+ * namespace or lies beneath it at a {@code /} boundary.
+ *
  * @author Yuriy Bezsonov
  */
 public class AgentCoreLongTermMemoryRetriever {
@@ -99,7 +105,7 @@ public class AgentCoreLongTermMemoryRetriever {
 				.build();
 
 			ListMemoryRecordsResponse response = this.client.listMemoryRecords(request);
-			List<MemoryRecord> records = this.extractRecords(response.memoryRecordSummaries());
+			List<MemoryRecord> records = this.extractRecords(response.memoryRecordSummaries(), namespace);
 			logger.debug("Found {} memories in namespace: {}", records.size(), namespace);
 			return records;
 		}
@@ -121,7 +127,7 @@ public class AgentCoreLongTermMemoryRetriever {
 				.build();
 
 			RetrieveMemoryRecordsResponse response = this.client.retrieveMemoryRecords(request);
-			List<MemoryRecord> records = this.extractRecords(response.memoryRecordSummaries());
+			List<MemoryRecord> records = this.extractRecords(response.memoryRecordSummaries(), namespace);
 			logger.debug("Found {} memories for query: {}", records.size(), query);
 			return records;
 		}
@@ -131,17 +137,45 @@ public class AgentCoreLongTermMemoryRetriever {
 		}
 	}
 
-	private List<MemoryRecord> extractRecords(List<MemoryRecordSummary> summaries) {
+	private List<MemoryRecord> extractRecords(List<MemoryRecordSummary> summaries, String namespace) {
 		if (summaries == null || summaries.isEmpty()) {
 			return List.of();
 		}
 		List<MemoryRecord> records = new ArrayList<>();
+		int dropped = 0;
 		for (MemoryRecordSummary summary : summaries) {
+			if (!isInNamespace(summary, namespace)) {
+				// Details at DEBUG only: the namespaces contain other actors' IDs
+				logger.debug("Dropping memory record {} outside requested namespace {}: {}", summary.memoryRecordId(),
+						namespace, summary.namespaces());
+				dropped++;
+				continue;
+			}
 			String contentText = (summary.content() != null) ? summary.content().text() : "";
 			records.add(new MemoryRecord(summary.memoryRecordId(), contentText,
 					(summary.score() != null) ? summary.score() : 0.0));
 		}
+		if (dropped > 0) {
+			logger.warn("Dropped {} memory records outside requested namespace {}", dropped, namespace);
+		}
 		return records;
+	}
+
+	/**
+	 * Whether any of the record's namespaces is the requested namespace or a descendant
+	 * of it. Records without namespaces are rejected.
+	 * @param summary the memory record returned by the service
+	 * @param namespace the resolved namespace that was requested
+	 * @return {@code true} if the record belongs to the requested namespace
+	 */
+	private static boolean isInNamespace(MemoryRecordSummary summary, String namespace) {
+		if (!summary.hasNamespaces()) {
+			return false;
+		}
+		String parent = (namespace.endsWith("/")) ? namespace : namespace + "/";
+		return summary.namespaces()
+			.stream()
+			.anyMatch((actual) -> actual != null && (actual.equals(namespace) || actual.startsWith(parent)));
 	}
 
 	public record MemoryRecord(String id, String content, double score) {

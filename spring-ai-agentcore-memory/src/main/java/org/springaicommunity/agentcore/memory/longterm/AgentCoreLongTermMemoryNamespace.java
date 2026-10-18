@@ -62,7 +62,8 @@ public enum AgentCoreLongTermMemoryNamespace {
 	 * @param sessionId the session ID (optional, only used if pattern contains
 	 * {sessionId})
 	 * @return the resolved namespace string
-	 * @throws IllegalArgumentException if required variables are missing
+	 * @throws IllegalArgumentException if required variables are missing, or if the actor
+	 * ID contains {@code /} or {@code *}
 	 */
 	public static String buildNamespace(String pattern, String strategyId, String actorId, String sessionId) {
 		if (pattern == null || pattern.isEmpty()) {
@@ -73,6 +74,12 @@ public enum AgentCoreLongTermMemoryNamespace {
 		}
 		if (actorId == null || actorId.isEmpty()) {
 			throw new IllegalArgumentException("actorId is required");
+		}
+		// AgentCore accepts '/' in actor IDs, but the namespace of actor "bob/x" lies
+		// beneath that of actor "bob" and cannot be told apart from bob's own records.
+		// '*' is never a valid actor ID and must not reach the namespace filter.
+		if (actorId.contains("/") || actorId.contains("*")) {
+			throw new IllegalArgumentException("actorId must not contain '/' or '*'");
 		}
 
 		String namespace = pattern.replace("{memoryStrategyId}", strategyId).replace("{actorId}", actorId);

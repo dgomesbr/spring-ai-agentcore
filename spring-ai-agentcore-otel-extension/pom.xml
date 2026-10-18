@@ -7,7 +7,7 @@
     <parent>
         <groupId>org.springaicommunity</groupId>
         <artifactId>spring-ai-agentcore-parent</artifactId>
-        <version>2.3.0-SNAPSHOT</version>
+        <version>2.4.0-SNAPSHOT</version>
     </parent>
 
     <url>https://github.com/spring-ai-community/spring-ai-agentcore</url>
@@ -22,8 +22,20 @@
     <description>OTel Java agent extension that adds aws.service.type=gen_ai_agent resource attribute for the CloudWatch GenAI Observability dashboard</description>
 
     <properties>
-        <opentelemetry.version>1.66.0</opentelemetry.version>
+        <opentelemetry.version>1.67.0</opentelemetry.version>
     </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>io.opentelemetry</groupId>
+                <artifactId>opentelemetry-bom</artifactId>
+                <version>${opentelemetry.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <dependencies>
         <dependency>
