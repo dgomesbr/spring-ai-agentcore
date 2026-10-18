@@ -133,6 +133,9 @@ chatClient.prompt()
 so it derives `Session.userId` from the actor (userId) segment of the sessionId (parsed
 by `AgentCoreMemoryConversationIdParser`). The sessionId format is therefore
 `"userId:sessionSuffix"` (for example `"alice:conv-1"`, where `alice` is the userId).
+The sessionId is split at its last colon, so the userId may contain colons
+(`"tenant:alice:conv-1"`) but the suffix may not; see
+[Conversation ID Format](#conversation-id-format) for the allowed characters.
 When you set `USER_ID_CONTEXT_KEY` per-request, pass the same value as the userId prefix.
 On the second turn `SessionMemoryAdvisor.before()` runs an ownership check that compares
 `USER_ID_CONTEXT_KEY` against the derived `Session.userId`; a mismatch throws
@@ -442,6 +445,28 @@ The repository supports flexible conversation ID formats:
 
 - **Simple**: `user123` → actor: `user123`, session: `default-session`
 - **With Session**: `user123:session456` → actor: `user123`, session: `session456`
+
+The conversation ID is split at its **last** colon. AgentCore allows colons inside an actor ID (for example a tenant prefix or a URN-style subject) but never inside a session ID, so `tenant:alice:conv-1` means actor `tenant:alice` and session `conv-1`. Two rules follow from this:
+
+- An actor ID that contains a colon must always come with a session. On its own, `tenant:alice` means actor `tenant` and session `alice`.
+- A session ID cannot contain a colon.
+
+Build compound IDs with `AgentCoreMemoryConversationIdParser.of(userId, sessionSuffix)` rather than by concatenating strings. It trims both parts, accepts colons in the user ID, and throws `IllegalArgumentException` when a part is blank or the session suffix contains a colon:
+
+```java
+String conversationId = AgentCoreMemoryConversationIdParser.of("tenant:alice", "conv-1"); // "tenant:alice:conv-1"
+```
+
+### Allowed Characters
+
+AgentCore rejects a request whose actor ID or session ID breaks the rules below (see the [CreateEvent API reference](https://docs.aws.amazon.com/bedrock-agentcore/latest/APIReference/API_CreateEvent.html)). This module does not check the characters in advance.
+
+| ID | Length | Allowed characters |
+|----|--------|--------------------|
+| Actor ID | 1 to 255 | ASCII letters, digits, `-`, `_`, `/` and `:`. Must start with a letter or digit. Each colon must be followed by another allowed character, so an actor ID cannot end with `:` or contain `::`. |
+| Session ID | 1 to 100 | ASCII letters, digits, `-` and `_`. Must start with a letter or digit. |
+
+User IDs from identity providers often break these rules: e-mail addresses contain `@` and `.`, and subjects such as `auth0|123` contain `|`. Map such a subject to a safe, stable value before using it as the actor ID, for example your application's internal user ID or a hex-encoded SHA-256 hash of the subject. Use the same mapped value everywhere the user ID appears, including `SessionMemoryAdvisor.USER_ID_CONTEXT_KEY`.
 
 ## Error Handling
 

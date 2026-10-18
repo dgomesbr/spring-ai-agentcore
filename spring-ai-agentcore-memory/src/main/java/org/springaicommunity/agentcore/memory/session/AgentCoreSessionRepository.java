@@ -871,7 +871,7 @@ public final class AgentCoreSessionRepository implements SessionRepository {
 					+ "' has an empty session segment; expected 'actorId' or 'actorId:sessionId'");
 		}
 		if (sessionId.indexOf(':') != sessionId.lastIndexOf(':')) {
-			logger.debug("Multi-colon sessionId '{}' parsed as actor '{}' session '{}' (split on first colon)",
+			logger.debug("Multi-colon sessionId '{}' parsed as actor '{}' session '{}' (split on last colon)",
 					sessionId, actor, session);
 		}
 		return new AgentCoreMemoryConversationIdParser.ActorAndSession(actor, session);

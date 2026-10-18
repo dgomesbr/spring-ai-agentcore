@@ -18,6 +18,7 @@ package org.springaicommunity.agentcore.memory;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -50,7 +51,7 @@ class AgentCoreMemoryConversationIdParserAdversarialTests {
 
 	@Test
 	void parseHandlesVeryLongStringWithoutBlowup() {
-		// 1 MB actor segment plus a suffix; split(":", 2) is linear, must not hang/OOM.
+		// 1 MB actor segment plus a suffix; lastIndexOf is linear, must not hang/OOM.
 		String big = "x".repeat(1_000_000) + ":s";
 		var result = AgentCoreMemoryConversationIdParser.parse(big);
 		assertThat(result.actor()).hasSize(1_000_000);
@@ -59,11 +60,21 @@ class AgentCoreMemoryConversationIdParserAdversarialTests {
 
 	@Test
 	void parseHandlesManyColonsWithoutBlowup() {
-		// split(":", 2) keeps everything after the first colon in the session segment.
+		// Splitting at the last colon keeps every earlier colon in the actor segment.
 		String many = "a:" + ":".repeat(100_000);
 		var result = AgentCoreMemoryConversationIdParser.parse(many);
-		assertThat(result.actor()).isEqualTo("a");
-		assertThat(result.session()).isEqualTo(":".repeat(100_000));
+		assertThat(result.actor()).isEqualTo("a" + ":".repeat(100_000));
+		assertThat(result.session()).isEmpty();
+	}
+
+	@ParameterizedTest
+	@CsvSource({ "a:b:c, a:b, c", "tenant:alice:s1, tenant:alice, s1", "urn:x:user:1:conv, urn:x:user:1, conv",
+			"::s, :, s", "a:b:, a:b, ''" })
+	void parseSplitsMultiColonInputAtTheLastColon(String conversationId, String actor, String session) {
+		// Session ids never contain ':' in AgentCore, so the last colon is the separator.
+		var result = AgentCoreMemoryConversationIdParser.parse(conversationId);
+		assertThat(result.actor()).isEqualTo(actor);
+		assertThat(result.session()).isEqualTo(session);
 	}
 
 	// ==================== Unicode / non-ASCII pass-through ====================

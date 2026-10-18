@@ -185,6 +185,29 @@ public class AgentCoreShortTermMemoryRepositoryTests {
 	}
 
 	@Test
+	void shouldKeepColonInActorIdForReadsAndWrites() {
+		// #260: actor ids may contain ':', so the last colon starts the session id.
+		given(this.client.createEvent(any(CreateEventRequest.class)))
+			.willReturn(CreateEventResponse.builder().event(this.buildTestEvent()).build());
+		given(this.client.listEvents(any(ListEventsRequest.class)))
+			.willReturn(ListEventsResponse.builder().events(this.buildTestEvent()).build());
+
+		var conversationId = "tenant:alice:s1";
+		this.memoryRepository.saveAll(conversationId, List.of(UserMessage.builder().text("hello").build()));
+		this.memoryRepository.findByConversationId(conversationId);
+
+		ArgumentCaptor<CreateEventRequest> createCaptor = ArgumentCaptor.forClass(CreateEventRequest.class);
+		then(this.client).should().createEvent(createCaptor.capture());
+		assertThat(createCaptor.getValue().actorId()).isEqualTo("tenant:alice");
+		assertThat(createCaptor.getValue().sessionId()).isEqualTo("s1");
+
+		ArgumentCaptor<ListEventsRequest> listCaptor = ArgumentCaptor.forClass(ListEventsRequest.class);
+		then(this.client).should().listEvents(listCaptor.capture());
+		assertThat(listCaptor.getValue().actorId()).isEqualTo("tenant:alice");
+		assertThat(listCaptor.getValue().sessionId()).isEqualTo("s1");
+	}
+
+	@Test
 	void shouldRespectTotalLimitWhenConfigured() {
 		var memoryRepositoryWithLimit = new AgentCoreShortTermMemoryRepository("testMemoryId", this.client, 1,
 				"default-session", 100, false);
