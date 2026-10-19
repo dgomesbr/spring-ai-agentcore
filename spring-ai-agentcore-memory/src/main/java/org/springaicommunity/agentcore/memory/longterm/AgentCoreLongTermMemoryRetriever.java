@@ -46,6 +46,15 @@ public class AgentCoreLongTermMemoryRetriever {
 
 	private static final Logger logger = LoggerFactory.getLogger(AgentCoreLongTermMemoryRetriever.class);
 
+	/** Largest {@code maxResults} that {@code ListMemoryRecords} accepts (default 20). */
+	private static final int SERVICE_MAX_RESULTS = 100;
+
+	/**
+	 * Maximum number of {@code ListMemoryRecords} pages read per listing. Caps the round
+	 * trips and the number of records that end up in the prompt.
+	 */
+	static final int MAX_LIST_PAGES = 10;
+
 	private final BedrockAgentCoreClient client;
 
 	private final String memoryId;
@@ -88,24 +97,44 @@ public class AgentCoreLongTermMemoryRetriever {
 
 	/**
 	 * List all memories for an actor (no semantic search). Used for preferences.
+	 *
+	 * <p>
+	 * Follows {@code nextToken} through the {@code ListMemoryRecords} pages. Stops after
+	 * 10 pages of 100 records and logs a warning if more records remain.
 	 * @param strategyId the memory strategy id
 	 * @param actorId the actor id
 	 * @param namespacePattern the namespace pattern to scope the listing
-	 * @return all matching memory records
+	 * @return the matching memory records, at most 1,000
 	 */
 	public List<MemoryRecord> listMemories(String strategyId, String actorId, String namespacePattern) {
 		String namespace = AgentCoreLongTermMemoryNamespace.buildNamespace(namespacePattern, strategyId, actorId, null);
 		logger.debug("Listing memories: namespace={}", namespace);
 
 		try {
-			ListMemoryRecordsRequest request = ListMemoryRecordsRequest.builder()
-				.memoryId(this.memoryId)
-				.namespace(namespace)
-				.memoryStrategyId(strategyId)
-				.build();
+			List<MemoryRecordSummary> summaries = new ArrayList<>();
+			String nextToken = null;
+			int pages = 0;
+			do {
+				ListMemoryRecordsRequest request = ListMemoryRecordsRequest.builder()
+					.memoryId(this.memoryId)
+					.namespace(namespace)
+					.memoryStrategyId(strategyId)
+					.maxResults(SERVICE_MAX_RESULTS)
+					.nextToken(nextToken)
+					.build();
 
-			ListMemoryRecordsResponse response = this.client.listMemoryRecords(request);
-			List<MemoryRecord> records = this.extractRecords(response.memoryRecordSummaries(), namespace);
+				ListMemoryRecordsResponse response = this.client.listMemoryRecords(request);
+				summaries.addAll(response.memoryRecordSummaries());
+				nextToken = response.nextToken();
+				pages++;
+			}
+			while (nextToken != null && pages < MAX_LIST_PAGES);
+
+			if (nextToken != null) {
+				logger.warn("Stopped listing memories after {} pages and skipped the remaining records: namespace={}",
+						pages, namespace);
+			}
+			List<MemoryRecord> records = this.extractRecords(summaries, namespace);
 			logger.debug("Found {} memories in namespace: {}", records.size(), namespace);
 			return records;
 		}
