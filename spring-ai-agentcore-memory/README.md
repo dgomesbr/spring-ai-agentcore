@@ -423,9 +423,9 @@ Available placeholders:
 - `{actorId}` - The user/actor ID  
 - `{sessionId}` - The session ID (required for session-scoped patterns)
 
-**Note**: Only these predefined placeholders are supported. Custom placeholders are not allowed.
+**Note**: Only these predefined placeholders are supported. Custom placeholders are not allowed: with explicit configuration, startup fails if a pattern uses any other placeholder (for example a custom namespace key), because retrieval cannot fill it.
 
-Validation compares placeholders by name, so a pattern that puts `{sessionId}` where the memory has `{actorId}` (or the reverse) fails at startup instead of reading the wrong scope. A literal segment in the memory only matches `{memoryStrategyId}`, and only when it equals the configured strategy ID. The episodic `reflections-namespace-pattern` is checked against the strategy's reflection namespaces, whether they come from `episodicReflectionConfiguration` or from the `episodicReflectionOverride` of a `customReflectionConfiguration`.
+With explicit configuration (`auto-discovery: false`), startup validation compares placeholders by name, so a pattern that puts `{sessionId}` where the memory has `{actorId}` (or the reverse) fails instead of reading the wrong scope. A placeholder in the pattern does not match a literal segment in the memory, except `{memoryStrategyId}`, which matches a literal equal to the configured strategy ID. All other segments must be identical. The episodic `reflections-namespace-pattern` is checked against the strategy's reflection namespaces, whether they come from `episodicReflectionConfiguration` or from the `episodicReflectionOverride` of a `customReflectionConfiguration`. With the deprecated `namespace.auto-register=true`, a mismatching pattern is registered only if it contains `{actorId}`, and only after all checks have passed.
 
 #### Defaults Summary
 

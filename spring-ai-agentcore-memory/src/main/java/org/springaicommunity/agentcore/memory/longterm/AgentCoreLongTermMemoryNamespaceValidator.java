@@ -16,6 +16,7 @@
 
 package org.springaicommunity.agentcore.memory.longterm;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
@@ -97,7 +98,9 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 	 * reflection namespaces of episodic strategies. Reflection namespaces live in the
 	 * strategy's reflection configuration, not in its namespaces, so they are validated
 	 * against those and are never auto-registered (registration writes the strategy's
-	 * episode namespaces).
+	 * episode namespaces). With auto-registration, a mismatching pattern is registered
+	 * only if it contains {@code {actorId}}, and only after every check has passed, so a
+	 * failed validation never changes the memory.
 	 * @param memoryId the memory resource ID
 	 * @param namespacesByStrategy map of strategy ID to its list of expected namespace
 	 * patterns
@@ -123,20 +126,25 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 					"Memory '" + memoryId + "' has no strategies configured. " + "LTM requires at least one strategy.");
 		}
 
+		List<Registration> registrations = new ArrayList<>();
 		for (Map.Entry<String, List<String>> entry : namespacesByStrategy.entrySet()) {
 			String strategyId = entry.getKey();
 			List<String> expectedPatterns = entry.getValue();
-			this.validateStrategy(memoryId, strategies, strategyId, expectedPatterns);
+			this.validateStrategy(memoryId, strategies, strategyId, expectedPatterns, registrations);
 		}
 		for (Map.Entry<String, String> entry : reflectionNamespacesByStrategy.entrySet()) {
 			this.validateReflections(memoryId, strategies, entry.getKey(), entry.getValue());
+		}
+		// Registration writes to AWS, so it waits until every check above has passed.
+		for (Registration registration : registrations) {
+			this.registrar.registerNamespace(memoryId, registration.strategyId(), registration.namespacePattern());
 		}
 
 		logger.info("Namespace validation passed for {} strategies", namespacesByStrategy.size());
 	}
 
 	private void validateStrategy(String memoryId, List<MemoryStrategy> strategies, String strategyId,
-			List<String> expectedPatterns) {
+			List<String> expectedPatterns, List<Registration> registrations) {
 		MemoryStrategy strategy = findStrategy(memoryId, strategies, strategyId);
 
 		List<String> actualNamespaces = strategy.namespaces();
@@ -147,15 +155,18 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 
 		// Every expected pattern must match at least one actual namespace.
 		for (String expected : expectedPatterns) {
+			requireFillablePlaceholders(strategyId, expected);
 			boolean matched = actualNamespaces.stream()
 				.anyMatch((actual) -> this.matchesPattern(actual, expected, strategyId));
 			if (!matched) {
-				if (this.autoRegister) {
-					this.registrar.registerNamespace(memoryId, strategyId, expected);
+				// Registering a pattern without {actorId} would make all actors share
+				// one namespace, so such a mismatch fails even with auto-registration.
+				if (this.autoRegister && isSupported(expected)) {
+					registrations.add(new Registration(strategyId, expected));
 				}
 				else {
-					throw new AgentCoreMemoryException.ConfigurationException(
-							this.buildErrorMessage(strategy, actualNamespaces, expected));
+					String message = this.buildErrorMessage(strategy, actualNamespaces, expected);
+					throw new AgentCoreMemoryException.ConfigurationException(message + this.notRegisteredHint());
 				}
 			}
 		}
@@ -166,6 +177,7 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 
 	private void validateReflections(String memoryId, List<MemoryStrategy> strategies, String strategyId,
 			String expectedPattern) {
+		requireFillablePlaceholders(strategyId, expectedPattern);
 		MemoryStrategy strategy = findStrategy(memoryId, strategies, strategyId);
 		List<String> actualNamespaces = reflectionNamespaces(strategy);
 		boolean matched = actualNamespaces.stream()
@@ -301,6 +313,29 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 		return "The " + what + " of the memory cannot be used: it must contain {actorId} and may only use the "
 				+ "placeholders " + SUPPORTED_PLACEHOLDERS + ". Change the " + what
 				+ " of the memory strategy with the AWS console, CLI or your infrastructure tooling.";
+	}
+
+	// Why auto-registration skipped a mismatching pattern; empty when it is off.
+	private String notRegisteredHint() {
+		return (this.autoRegister) ? String.format("%n%nThe configured pattern was not registered automatically: it "
+				+ "does not contain {actorId}, so all actors would share its records.") : "";
+	}
+
+	// Retrieval fills only the supported placeholders. Any other one, such as a custom
+	// namespace key, would reach AWS as literal braces and fail every retrieval.
+	private static void requireFillablePlaceholders(String strategyId, String pattern) {
+		Matcher matcher = PLACEHOLDER.matcher(pattern);
+		while (matcher.find()) {
+			if (!SUPPORTED_PLACEHOLDERS.contains(matcher.group())) {
+				throw new AgentCoreMemoryException.ConfigurationException(String.format(
+						"Namespace pattern '%s' for strategy '%s' uses the placeholder %s, which retrieval cannot "
+								+ "fill. Supported placeholders: %s.",
+						pattern, strategyId, matcher.group(), SUPPORTED_PLACEHOLDERS));
+			}
+		}
+	}
+
+	private record Registration(String strategyId, String namespacePattern) {
 	}
 
 }
