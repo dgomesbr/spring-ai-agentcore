@@ -80,9 +80,10 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 	}
 
 	/**
-	 * Validates namespace configuration for all configured strategies. Each strategy may
-	 * map to one or more expected namespace patterns (e.g. episodic strategies with
-	 * reflections have two namespaces under the same strategy id).
+	 * Validates namespace configuration for all configured strategies. Each strategy maps
+	 * to its expected namespace patterns. AWS gives a strategy exactly one namespace, so
+	 * configure one pattern per strategy; episodic reflection namespaces are validated
+	 * separately (see {@link #validateNamespaces(String, Map, Map)}).
 	 * @param memoryId the memory resource ID
 	 * @param namespacesByStrategy map of strategy ID to its list of expected namespace
 	 * patterns
