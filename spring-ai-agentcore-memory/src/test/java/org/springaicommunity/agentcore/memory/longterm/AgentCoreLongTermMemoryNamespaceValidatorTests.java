@@ -640,6 +640,27 @@ class AgentCoreLongTermMemoryNamespaceValidatorTests {
 		}
 
 		@Test
+		@DisplayName("Should read the namespace templates of a custom reflection override")
+		void shouldPassWhenCustomReflectionOverrideHasOnlyNamespaceTemplates() {
+			// AWS marks namespaces as legacy; an override may only report templates.
+			CustomReflectionConfiguration custom = CustomReflectionConfiguration.builder()
+				.episodicReflectionOverride(
+						EpisodicReflectionOverride.builder().namespaceTemplates(REFLECTIONS).build())
+				.build();
+			MemoryStrategy strategy = MemoryStrategy.builder()
+				.strategyId("episodic-123")
+				.namespaces(List.of(EPISODES))
+				.configuration(StrategyConfiguration.builder()
+					.reflection(ReflectionConfiguration.builder().customReflectionConfiguration(custom).build())
+					.build())
+				.build();
+			AgentCoreLongTermMemoryNamespaceValidatorTests.this.mockGetMemoryResponse(List.of(strategy));
+
+			AgentCoreLongTermMemoryNamespaceValidatorTests.this.validator.validateNamespaces("test-memory",
+					Map.of("episodic-123", List.of(EPISODES)), Map.of("episodic-123", REFLECTIONS));
+		}
+
+		@Test
 		@DisplayName("Should report custom reflection override namespaces on mismatch")
 		void shouldFailOnCustomReflectionOverrideMismatch() {
 			AgentCoreLongTermMemoryNamespaceValidatorTests.this

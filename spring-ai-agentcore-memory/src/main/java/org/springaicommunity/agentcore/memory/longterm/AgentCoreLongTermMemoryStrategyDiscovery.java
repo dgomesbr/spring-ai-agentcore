@@ -151,8 +151,14 @@ public class AgentCoreLongTermMemoryStrategyDiscovery {
 		if (episodic == null) {
 			return List.of();
 		}
-		List<String> reflectionNamespaces = episodic.namespaces();
-		return (reflectionNamespaces != null) ? List.copyOf(reflectionNamespaces) : List.of();
+		return namespacesOrTemplates(episodic.namespaces(), episodic.namespaceTemplates());
+	}
+
+	// AWS marks the reflection namespaces field as legacy in favor of
+	// namespaceTemplates, so fall back to the templates when it is empty.
+	static List<String> namespacesOrTemplates(List<String> namespaces, List<String> namespaceTemplates) {
+		List<String> chosen = (namespaces != null && !namespaces.isEmpty()) ? namespaces : namespaceTemplates;
+		return (chosen != null) ? List.copyOf(chosen) : List.of();
 	}
 
 	// A customReflectionConfiguration keeps its namespaces in its

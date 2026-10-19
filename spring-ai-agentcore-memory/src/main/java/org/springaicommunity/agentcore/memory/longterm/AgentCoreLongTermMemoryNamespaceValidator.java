@@ -222,8 +222,8 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 		ReflectionConfiguration reflection = (configuration != null) ? configuration.reflection() : null;
 		CustomReflectionConfiguration custom = (reflection != null) ? reflection.customReflectionConfiguration() : null;
 		EpisodicReflectionOverride override = (custom != null) ? custom.episodicReflectionOverride() : null;
-		List<String> namespaces = (override != null) ? override.namespaces() : null;
-		return (namespaces != null) ? List.copyOf(namespaces) : List.of();
+		return (override != null) ? AgentCoreLongTermMemoryStrategyDiscovery
+			.namespacesOrTemplates(override.namespaces(), override.namespaceTemplates()) : List.of();
 	}
 
 	// Placeholders are filled at retrieval time, so a placeholder only matches the same

@@ -81,6 +81,31 @@ class AgentCoreLongTermMemoryStrategyDiscoveryTests {
 	}
 
 	@Test
+	void shouldFallBackToReflectionNamespaceTemplates() {
+		// AWS marks namespaces as legacy; a memory may only report namespaceTemplates.
+		MemoryStrategy strategy = MemoryStrategy.builder()
+			.strategyId("ep-4")
+			.type(MemoryStrategyType.EPISODIC)
+			.namespaces(List.of("/strategy/{memoryStrategyId}/actor/{actorId}/"))
+			.configuration(StrategyConfiguration.builder()
+				.reflection(ReflectionConfiguration.builder()
+					.episodicReflectionConfiguration(EpisodicReflectionConfiguration.builder()
+						.namespaceTemplates("/strategy/{memoryStrategyId}/")
+						.build())
+					.build())
+				.build())
+			.build();
+
+		this.mockGetMemory(List.of(strategy));
+
+		DiscoveredStrategy ds = new AgentCoreLongTermMemoryStrategyDiscovery(this.controlClient)
+			.discoverStrategies("mem-1")
+			.get(0);
+
+		assertThat(ds.reflectionsNamespaces()).containsExactly("/strategy/{memoryStrategyId}/");
+	}
+
+	@Test
 	void shouldReturnEmptyReflectionsForEpisodicWithoutReflectionConfig() {
 		MemoryStrategy strategy = MemoryStrategy.builder()
 			.strategyId("ep-2")
