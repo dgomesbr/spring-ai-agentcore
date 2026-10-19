@@ -28,7 +28,9 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springaicommunity.agentcore.memory.AgentCoreMemoryException;
 import software.amazon.awssdk.services.bedrockagentcorecontrol.BedrockAgentCoreControlClient;
+import software.amazon.awssdk.services.bedrockagentcorecontrol.model.CustomReflectionConfiguration;
 import software.amazon.awssdk.services.bedrockagentcorecontrol.model.EpisodicReflectionConfiguration;
+import software.amazon.awssdk.services.bedrockagentcorecontrol.model.EpisodicReflectionOverride;
 import software.amazon.awssdk.services.bedrockagentcorecontrol.model.GetMemoryRequest;
 import software.amazon.awssdk.services.bedrockagentcorecontrol.model.GetMemoryResponse;
 import software.amazon.awssdk.services.bedrockagentcorecontrol.model.Memory;
@@ -37,6 +39,10 @@ import software.amazon.awssdk.services.bedrockagentcorecontrol.model.MemoryStrat
 import software.amazon.awssdk.services.bedrockagentcorecontrol.model.ReflectionConfiguration;
 import software.amazon.awssdk.services.bedrockagentcorecontrol.model.StrategyConfiguration;
 
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
+
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
@@ -49,7 +55,7 @@ import static org.mockito.Mockito.never;
  *
  * @author Yuriy Bezsonov
  */
-@ExtendWith(MockitoExtension.class)
+@ExtendWith({ MockitoExtension.class, OutputCaptureExtension.class })
 @DisplayName("AgentCore Long-Term Memory Namespace Validator Tests")
 class AgentCoreLongTermMemoryNamespaceValidatorTests {
 
@@ -293,6 +299,82 @@ class AgentCoreLongTermMemoryNamespaceValidatorTests {
 			.hasMessageContaining("Namespace mismatch");
 	}
 
+	@Test
+	@DisplayName("Should fail when placeholders are swapped between AWS and config")
+	void shouldFailWhenPlaceholdersAreSwapped() {
+		// Given - AWS scopes the slot by session, config fills it with the actor id
+		MemoryStrategy strategy = MemoryStrategy.builder()
+			.strategyId("semantic-123")
+			.namespaces(List.of("/strategies/{memoryStrategyId}/actors/{sessionId}"))
+			.build();
+
+		this.mockGetMemoryResponse(List.of(strategy));
+
+		// When/Then
+		assertThatThrownBy(() -> this.validator.validateNamespaces("test-memory",
+				Map.of("semantic-123", List.of(AgentCoreLongTermMemoryNamespace.ACTOR.getPattern()))))
+			.isInstanceOf(AgentCoreMemoryException.ConfigurationException.class)
+			.hasMessageContaining("Namespace mismatch")
+			.hasMessageContaining("{sessionId}");
+	}
+
+	@Test
+	@DisplayName("Should fail when config expects an actor placeholder but AWS has a literal")
+	void shouldFailWhenActorPlaceholderMeetsLiteral() {
+		// Given - AWS writes every actor's records to one literal namespace
+		MemoryStrategy strategy = MemoryStrategy.builder()
+			.strategyId("semantic-123")
+			.namespaces(List.of("/strategies/{memoryStrategyId}/actors/alice"))
+			.build();
+
+		this.mockGetMemoryResponse(List.of(strategy));
+
+		// When/Then
+		assertThatThrownBy(() -> this.validator.validateNamespaces("test-memory",
+				Map.of("semantic-123", List.of(AgentCoreLongTermMemoryNamespace.ACTOR.getPattern()))))
+			.isInstanceOf(AgentCoreMemoryException.ConfigurationException.class)
+			.hasMessageContaining("Namespace mismatch");
+	}
+
+	@Test
+	@DisplayName("Should fail when resolved strategy id in AWS belongs to another strategy")
+	void shouldFailWhenResolvedStrategyIdDiffers() {
+		// Given
+		MemoryStrategy strategy = MemoryStrategy.builder()
+			.strategyId("semantic-123")
+			.namespaces(List.of("/strategies/other-999/actors/{actorId}"))
+			.build();
+
+		this.mockGetMemoryResponse(List.of(strategy));
+
+		// When/Then
+		assertThatThrownBy(() -> this.validator.validateNamespaces("test-memory",
+				Map.of("semantic-123", List.of(AgentCoreLongTermMemoryNamespace.ACTOR.getPattern()))))
+			.isInstanceOf(AgentCoreMemoryException.ConfigurationException.class)
+			.hasMessageContaining("Namespace mismatch");
+	}
+
+	@Test
+	@DisplayName("Should fail when the pattern uses a placeholder that retrieval cannot fill")
+	void shouldFailWhenPatternUsesUnfillablePlaceholder() {
+		// Given - a custom namespace key, identical in AWS and config; retrieval would
+		// send it to AWS as literal braces
+		String pattern = "/org/{orgname}/actors/{actorId}";
+		MemoryStrategy strategy = MemoryStrategy.builder()
+			.strategyId("semantic-123")
+			.namespaces(List.of(pattern))
+			.build();
+
+		this.mockGetMemoryResponse(List.of(strategy));
+
+		// When/Then
+		assertThatThrownBy(
+				() -> this.validator.validateNamespaces("test-memory", Map.of("semantic-123", List.of(pattern))))
+			.isInstanceOf(AgentCoreMemoryException.ConfigurationException.class)
+			.hasMessageContaining("{orgname}")
+			.hasMessageContaining("cannot fill");
+	}
+
 	private void mockGetMemoryResponse(List<MemoryStrategy> strategies) {
 		Memory memory = Memory.builder().strategies(strategies).build();
 		GetMemoryResponse response = GetMemoryResponse.builder().memory(memory).build();
@@ -377,6 +459,82 @@ class AgentCoreLongTermMemoryNamespaceValidatorTests {
 			then(this.registrar).should(never()).registerNamespace(any(), any(), any());
 		}
 
+		@Test
+		@DisplayName("Should not register a pattern without {actorId}, even when only its placeholders differ")
+		void shouldNotRegisterPatternWithoutActorId() {
+			// Registering it would replace the memory's actor-scoped namespace, so every
+			// actor's new records would share one namespace per session id.
+			MemoryStrategy strategy = MemoryStrategy.builder()
+				.strategyId("semantic-123")
+				.namespaces(List.of(AgentCoreLongTermMemoryNamespace.ACTOR.getPattern()))
+				.build();
+			AgentCoreLongTermMemoryNamespaceValidatorTests.this.mockGetMemoryResponse(List.of(strategy));
+
+			assertThatThrownBy(() -> this.validatorWithAutoRegister.validateNamespaces("test-memory",
+					Map.of("semantic-123", List.of("/strategies/{memoryStrategyId}/actors/{sessionId}"))))
+				.isInstanceOf(AgentCoreMemoryException.ConfigurationException.class)
+				.hasMessageContaining("Namespace mismatch")
+				.hasMessageContaining("not registered automatically");
+			then(this.registrar).should(never()).registerNamespace(any(), any(), any());
+		}
+
+		@Test
+		@DisplayName("Should register an actor pattern over a memory namespace with a literal actor")
+		void shouldRegisterActorPatternOverLiteralActorNamespace() {
+			// The literal used to pass by wildcard; now it is a mismatch, and the
+			// actor-scoped pattern is registered in its place.
+			MemoryStrategy strategy = MemoryStrategy.builder()
+				.strategyId("semantic-123")
+				.namespaces(List.of("/strategies/{memoryStrategyId}/actors/alice"))
+				.build();
+			AgentCoreLongTermMemoryNamespaceValidatorTests.this.mockGetMemoryResponse(List.of(strategy));
+			String expectedPattern = AgentCoreLongTermMemoryNamespace.ACTOR.getPattern();
+
+			this.validatorWithAutoRegister.validateNamespaces("test-memory",
+					Map.of("semantic-123", List.of(expectedPattern)));
+
+			then(this.registrar).should().registerNamespace("test-memory", "semantic-123", expectedPattern);
+		}
+
+		@Test
+		@DisplayName("Should not register anything when a later reflection check fails")
+		void shouldNotRegisterWhenReflectionCheckFails() {
+			EpisodicReflectionConfiguration reflections = EpisodicReflectionConfiguration.builder()
+				.namespaces(List.of("/reflections/{actorId}"))
+				.build();
+			MemoryStrategy strategy = MemoryStrategy.builder()
+				.strategyId("episodic-123")
+				.namespaces(List.of("/old/episodes/{actorId}"))
+				.configuration(StrategyConfiguration.builder()
+					.reflection(ReflectionConfiguration.builder().episodicReflectionConfiguration(reflections).build())
+					.build())
+				.build();
+			AgentCoreLongTermMemoryNamespaceValidatorTests.this.mockGetMemoryResponse(List.of(strategy));
+
+			assertThatThrownBy(() -> this.validatorWithAutoRegister.validateNamespaces("test-memory",
+					Map.of("episodic-123", List.of("/episodes/{actorId}/{sessionId}")),
+					Map.of("episodic-123", "/episodes/{actorId}")))
+				.isInstanceOf(AgentCoreMemoryException.ConfigurationException.class)
+				.hasMessageContaining("Reflection namespace mismatch");
+			then(this.registrar).should(never()).registerNamespace(any(), any(), any());
+		}
+
+		@Test
+		@DisplayName("Should not register a pattern with a placeholder that retrieval cannot fill")
+		void shouldNotRegisterPatternWithUnfillablePlaceholder() {
+			MemoryStrategy strategy = MemoryStrategy.builder()
+				.strategyId("semantic-123")
+				.namespaces(List.of(AgentCoreLongTermMemoryNamespace.ACTOR.getPattern()))
+				.build();
+			AgentCoreLongTermMemoryNamespaceValidatorTests.this.mockGetMemoryResponse(List.of(strategy));
+
+			assertThatThrownBy(() -> this.validatorWithAutoRegister.validateNamespaces("test-memory",
+					Map.of("semantic-123", List.of("/org/{orgname}/actors/{actorId}"))))
+				.isInstanceOf(AgentCoreMemoryException.ConfigurationException.class)
+				.hasMessageContaining("{orgname}");
+			then(this.registrar).should(never()).registerNamespace(any(), any(), any());
+		}
+
 	}
 
 	@Nested
@@ -439,6 +597,94 @@ class AgentCoreLongTermMemoryNamespaceValidatorTests {
 				.hasMessageContaining("Reflection namespace mismatch")
 				.hasMessageContaining("cannot be used")
 				.hasMessageNotContaining("reflections-namespace-pattern=");
+		}
+
+		@Test
+		@DisplayName("Should fail when reflection placeholders are swapped")
+		void shouldFailWhenReflectionPlaceholdersAreSwapped() {
+			AgentCoreLongTermMemoryNamespaceValidatorTests.this
+				.mockGetMemoryResponse(List.of(episodicStrategy(List.of("/episodes/{sessionId}"))));
+
+			assertThatThrownBy(() -> AgentCoreLongTermMemoryNamespaceValidatorTests.this.validator.validateNamespaces(
+					"test-memory", Map.of("episodic-123", List.of(EPISODES)), Map.of("episodic-123", REFLECTIONS)))
+				.isInstanceOf(AgentCoreMemoryException.ConfigurationException.class)
+				.hasMessageContaining("Reflection namespace mismatch");
+		}
+
+		@Test
+		@DisplayName("Should fail when the reflections pattern uses a placeholder that retrieval cannot fill")
+		void shouldFailWhenReflectionsPatternUsesUnfillablePlaceholder() {
+			String reflections = "/reflections/{orgname}/{actorId}";
+			AgentCoreLongTermMemoryNamespaceValidatorTests.this
+				.mockGetMemoryResponse(List.of(episodicStrategy(List.of(reflections))));
+
+			assertThatThrownBy(() -> AgentCoreLongTermMemoryNamespaceValidatorTests.this.validator.validateNamespaces(
+					"test-memory", Map.of("episodic-123", List.of(EPISODES)), Map.of("episodic-123", reflections)))
+				.isInstanceOf(AgentCoreMemoryException.ConfigurationException.class)
+				.hasMessageContaining("{orgname}")
+				.hasMessageContaining("cannot fill");
+		}
+
+		@Test
+		@DisplayName("Should validate reflections pattern against a custom reflection override")
+		void shouldPassWhenReflectionsPatternMatchesCustomReflectionOverride(CapturedOutput output) {
+			AgentCoreLongTermMemoryNamespaceValidatorTests.this
+				.mockGetMemoryResponse(List.of(customReflectionStrategy(List.of(REFLECTIONS))));
+
+			AgentCoreLongTermMemoryNamespaceValidatorTests.this.validator.validateNamespaces("test-memory",
+					Map.of("episodic-123", List.of(EPISODES)), Map.of("episodic-123", REFLECTIONS));
+
+			// The auto-discovery hint to set the pattern is wrong here: it is already
+			// set.
+			assertThat(output).doesNotContain("uses customReflectionConfiguration");
+		}
+
+		@Test
+		@DisplayName("Should read the namespace templates of a custom reflection override")
+		void shouldPassWhenCustomReflectionOverrideHasOnlyNamespaceTemplates() {
+			// AWS marks namespaces as legacy; an override may only report templates.
+			CustomReflectionConfiguration custom = CustomReflectionConfiguration.builder()
+				.episodicReflectionOverride(
+						EpisodicReflectionOverride.builder().namespaceTemplates(REFLECTIONS).build())
+				.build();
+			MemoryStrategy strategy = MemoryStrategy.builder()
+				.strategyId("episodic-123")
+				.namespaces(List.of(EPISODES))
+				.configuration(StrategyConfiguration.builder()
+					.reflection(ReflectionConfiguration.builder().customReflectionConfiguration(custom).build())
+					.build())
+				.build();
+			AgentCoreLongTermMemoryNamespaceValidatorTests.this.mockGetMemoryResponse(List.of(strategy));
+
+			AgentCoreLongTermMemoryNamespaceValidatorTests.this.validator.validateNamespaces("test-memory",
+					Map.of("episodic-123", List.of(EPISODES)), Map.of("episodic-123", REFLECTIONS));
+		}
+
+		@Test
+		@DisplayName("Should report custom reflection override namespaces on mismatch")
+		void shouldFailOnCustomReflectionOverrideMismatch() {
+			AgentCoreLongTermMemoryNamespaceValidatorTests.this
+				.mockGetMemoryResponse(List.of(customReflectionStrategy(List.of("/reflections/{actorId}"))));
+
+			assertThatThrownBy(() -> AgentCoreLongTermMemoryNamespaceValidatorTests.this.validator.validateNamespaces(
+					"test-memory", Map.of("episodic-123", List.of(EPISODES)), Map.of("episodic-123", REFLECTIONS)))
+				.isInstanceOf(AgentCoreMemoryException.ConfigurationException.class)
+				.hasMessageContaining("Reflection namespace mismatch")
+				.hasMessageContaining("/reflections/{actorId}");
+		}
+
+		private static MemoryStrategy customReflectionStrategy(List<String> overrideNamespaces) {
+			CustomReflectionConfiguration custom = CustomReflectionConfiguration.builder()
+				.episodicReflectionOverride(EpisodicReflectionOverride.builder().namespaces(overrideNamespaces).build())
+				.build();
+			ReflectionConfiguration reflection = ReflectionConfiguration.builder()
+				.customReflectionConfiguration(custom)
+				.build();
+			return MemoryStrategy.builder()
+				.strategyId("episodic-123")
+				.namespaces(List.of(EPISODES))
+				.configuration(StrategyConfiguration.builder().reflection(reflection).build())
+				.build();
 		}
 
 		private static MemoryStrategy episodicStrategy(List<String> reflectionNamespaces) {
