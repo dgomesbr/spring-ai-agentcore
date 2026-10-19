@@ -208,6 +208,21 @@ public class AgentCoreShortTermMemoryRepositoryTests {
 	}
 
 	@Test
+	void shouldTrimPaddedConversationIdLikeTheSessionRepository() {
+		// The session repository trims " tenant:alice : s1 "; STM must reach the same
+		// AgentCore actor and session instead of sending padded ids
+		given(this.client.listEvents(any(ListEventsRequest.class)))
+			.willReturn(ListEventsResponse.builder().events(this.buildTestEvent()).build());
+
+		this.memoryRepository.findByConversationId(" tenant:alice : s1 ");
+
+		ArgumentCaptor<ListEventsRequest> listCaptor = ArgumentCaptor.forClass(ListEventsRequest.class);
+		then(this.client).should().listEvents(listCaptor.capture());
+		assertThat(listCaptor.getValue().actorId()).isEqualTo("tenant:alice");
+		assertThat(listCaptor.getValue().sessionId()).isEqualTo("s1");
+	}
+
+	@Test
 	void shouldRespectTotalLimitWhenConfigured() {
 		var memoryRepositoryWithLimit = new AgentCoreShortTermMemoryRepository("testMemoryId", this.client, 1,
 				"default-session", 100, false);

@@ -31,7 +31,9 @@ package org.springaicommunity.agentcore.memory;
  * {@code "s1"}. An actor id that contains a colon must therefore always be passed in the
  * {@code "actorId:sessionId"} form, because the actor-only form {@code "tenant:alice"}
  * parses to actor {@code "tenant"} and session {@code "alice"}. Build the compound form
- * with {@link #of(String, String)}. This class does not check the characters AgentCore
+ * with {@link #of(String, String)}. Both segments are trimmed, as the session repository
+ * and {@link #of(String, String)} trim them, so every component derives the same actor
+ * and session from a padded id. This class does not check the characters AgentCore
  * accepts in actor and session ids; AgentCore rejects invalid ids when the request is
  * sent.
  *
@@ -88,9 +90,10 @@ public final class AgentCoreMemoryConversationIdParser {
 		// Session ids never contain ':', so the last colon is the separator.
 		int separator = conversationId.lastIndexOf(':');
 		if (separator >= 0) {
-			return new ActorAndSession(conversationId.substring(0, separator), conversationId.substring(separator + 1));
+			return new ActorAndSession(conversationId.substring(0, separator).trim(),
+					conversationId.substring(separator + 1).trim());
 		}
-		return new ActorAndSession(conversationId, (defaultSession != null) ? defaultSession : DEFAULT_SESSION);
+		return new ActorAndSession(conversationId.trim(), (defaultSession != null) ? defaultSession : DEFAULT_SESSION);
 	}
 
 	/**

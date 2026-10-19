@@ -136,7 +136,8 @@ by `AgentCoreMemoryConversationIdParser`). The sessionId format is therefore
 The sessionId is split at its last colon, so the userId may contain colons
 (`"tenant:alice:conv-1"`) but the suffix may not; see
 [Conversation ID Format](#conversation-id-format) for the allowed characters.
-When you set `USER_ID_CONTEXT_KEY` per-request, pass the same value as the userId prefix.
+When you set `USER_ID_CONTEXT_KEY` per-request, pass the same value as the userId prefix,
+without surrounding whitespace: both segments of the sessionId are trimmed.
 On the second turn `SessionMemoryAdvisor.before()` runs an ownership check that compares
 `USER_ID_CONTEXT_KEY` against the derived `Session.userId`; a mismatch throws
 `IllegalStateException("...does not belong to user...")`. The usual way to hit this is

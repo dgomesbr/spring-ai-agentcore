@@ -146,21 +146,22 @@ class AgentCoreMemoryConversationIdParserAdversarialTests {
 	@Test
 	void roughEdgeWhitespaceOnlyActorIsAccepted() {
 		// FINDING F3 (rough-edge / inconsistency): parse() uses isEmpty() not isBlank(),
-		// so a whitespace-only id is accepted here even though the repository's
-		// validateSessionId (trim().isEmpty()) would reject the same value.
+		// so a whitespace-only id is accepted here (as an empty actor) even though the
+		// repository's validateSessionId (trim().isEmpty()) would reject the same value.
 		var result = AgentCoreMemoryConversationIdParser.parse("   ");
-		assertThat(result.actor()).isEqualTo("   ");
+		assertThat(result.actor()).isEmpty();
 		assertThat(result.session()).isEqualTo(AgentCoreMemoryConversationIdParser.DEFAULT_SESSION);
 	}
 
 	@Test
-	void roughEdgeSegmentsAreNotTrimmed() {
-		// FINDING F4 (rough-edge): surrounding whitespace is preserved, so " alice:conv "
-		// and "alice:conv" are DIFFERENT actor/session pairs. A stray space silently
-		// fragments a user's session history.
+	void segmentsAreTrimmed() {
+		// FLIP of roughEdgeSegmentsAreNotTrimmed (FINDING F4): " alice : conv " now gives
+		// the same actor/session pair as "alice:conv" in every component, as the session
+		// repository and of() already trimmed.
 		var result = AgentCoreMemoryConversationIdParser.parse(" alice : conv ");
-		assertThat(result.actor()).isEqualTo(" alice ");
-		assertThat(result.session()).isEqualTo(" conv ");
+		assertThat(result.actor()).isEqualTo("alice");
+		assertThat(result.session()).isEqualTo("conv");
+		assertThat(AgentCoreMemoryConversationIdParser.parse("  alice  ").actor()).isEqualTo("alice");
 	}
 
 }
