@@ -97,17 +97,21 @@ public final class AgentCoreMemoryConversationIdParser {
 	 * Compose a compound conversationId from a user id and a session suffix.
 	 *
 	 * <p>
-	 * Use this instead of hand-concatenating {@code userId + ":" + sessionSuffix}. Both
-	 * segments are trimmed and must be non-blank. The user id may contain colons, because
-	 * {@link #parse} splits at the last colon. The session suffix must not: a colon there
-	 * would move the split point, and AgentCore session ids cannot contain one anyway.
-	 * The result round-trips through {@link #parse} and is always accepted by the session
-	 * repository seam (which applies the same trim and empty-segment rejection).
+	 * Use this instead of hand-concatenating {@code userId + ":" + sessionSuffix},
+	 * especially when the session suffix comes from the client: a colon in a concatenated
+	 * suffix would move the split point into the user id. Both segments are trimmed and
+	 * must be non-blank. The user id may contain colons, because {@link #parse} splits at
+	 * the last colon, but no part between its colons may be blank. The session suffix
+	 * must not contain a colon; AgentCore session ids cannot contain one anyway. Neither
+	 * segment may contain control characters. The result round-trips through
+	 * {@link #parse} and is always accepted by the session repository seam, which applies
+	 * the same trim and the same checks.
 	 * @param userId the user id (actor segment); must not be blank, may contain colons
 	 * @param sessionSuffix the session suffix; must not be blank or contain a colon
 	 * @return {@code trimmedUserId + ":" + trimmedSessionSuffix}
 	 * @throws IllegalArgumentException if either segment is null or blank after trimming,
-	 * or if the session suffix contains a colon
+	 * if the session suffix contains a colon, if a part of the user id between colons is
+	 * blank, or if either segment contains a control character
 	 */
 	public static String of(String userId, String sessionSuffix) {
 		if (userId == null || userId.trim().isEmpty()) {
@@ -120,7 +124,37 @@ public final class AgentCoreMemoryConversationIdParser {
 			throw new IllegalArgumentException("sessionSuffix must not contain ':' because AgentCore session ids"
 					+ " cannot contain it; the last ':' separates the user id from the session suffix");
 		}
-		return userId.trim() + ":" + sessionSuffix.trim();
+		String actor = userId.trim();
+		String session = sessionSuffix.trim();
+		if (hasBlankPart(actor)) {
+			throw new IllegalArgumentException(
+					"userId must not start or end with ':' or contain an empty part between colons");
+		}
+		rejectControlCharacters("userId", actor);
+		rejectControlCharacters("sessionSuffix", session);
+		return actor + ":" + session;
+	}
+
+	// As in ":tenant", "tenant:" or "a::b"; AgentCore never accepts such an actor id.
+	private static boolean hasBlankPart(String actor) {
+		for (String part : actor.split(":", -1)) {
+			if (part.isBlank()) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// The session repository rejects control characters too, so of() never builds an id
+	// that the repository refuses.
+	private static void rejectControlCharacters(String name, String value) {
+		for (int i = 0; i < value.length(); i++) {
+			char c = value.charAt(i);
+			if (c < 0x20 || c == 0x7F) {
+				throw new IllegalArgumentException("%s must not contain control characters (found U+%04X at index %d)"
+					.formatted(name, (int) c, i));
+			}
+		}
 	}
 
 	/**

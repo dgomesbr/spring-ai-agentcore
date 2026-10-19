@@ -862,7 +862,9 @@ public final class AgentCoreSessionRepository implements SessionRepository {
 			.parse(sessionId, this.defaultSession);
 		String actor = parsed.actor().trim();
 		String session = parsed.session().trim();
-		if (actor.isEmpty()) {
+		// The actor keeps every colon but the last, so a leading colon (":tenant:alice")
+		// or a doubled one ("tenant::conv") leaves a blank part in it.
+		if (hasBlankPart(actor)) {
 			throw new IllegalArgumentException("sessionId '" + sessionId
 					+ "' has an empty actor segment; expected 'actorId' or 'actorId:sessionId'");
 		}
@@ -875,6 +877,16 @@ public final class AgentCoreSessionRepository implements SessionRepository {
 					sessionId, actor, session);
 		}
 		return new AgentCoreMemoryConversationIdParser.ActorAndSession(actor, session);
+	}
+
+	// True for an empty actor and for any blank part between colons.
+	private static boolean hasBlankPart(String actor) {
+		for (String part : actor.split(":", -1)) {
+			if (part.isBlank()) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private static String validateMemoryId(String memoryId) {

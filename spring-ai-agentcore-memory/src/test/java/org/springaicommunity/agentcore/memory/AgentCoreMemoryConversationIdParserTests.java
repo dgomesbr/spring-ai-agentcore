@@ -17,6 +17,8 @@
 package org.springaicommunity.agentcore.memory;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -170,6 +172,34 @@ class AgentCoreMemoryConversationIdParserTests {
 		assertThatThrownBy(() -> AgentCoreMemoryConversationIdParser.of("alice", " conv: "))
 			.isInstanceOf(IllegalArgumentException.class)
 			.hasMessageContaining("sessionSuffix must not contain ':'");
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = { ":tenant", "tenant:", "a::b", "a: :b" })
+	void ofRejectsUserIdWithEmptyPartBetweenColons(String userId) {
+		// The session repository rejects these, and AgentCore never accepts them.
+		assertThatThrownBy(() -> AgentCoreMemoryConversationIdParser.of(userId, "s1"))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("empty part between colons");
+	}
+
+	@Test
+	void ofRejectsControlCharactersInsideEitherPart() {
+		// The session repository rejects control characters, so of() does too.
+		assertThatThrownBy(() -> AgentCoreMemoryConversationIdParser.of("al\tice", "s1"))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("userId must not contain control characters (found U+0009 at index 2)");
+		assertThatThrownBy(() -> AgentCoreMemoryConversationIdParser.of("alice", "s\u00001"))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("sessionSuffix must not contain control characters");
+		assertThatThrownBy(() -> AgentCoreMemoryConversationIdParser.of("alice", "s\u007F"))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("sessionSuffix must not contain control characters");
+	}
+
+	@Test
+	void ofTrimsBeforeCheckingForControlCharacters() {
+		assertThat(AgentCoreMemoryConversationIdParser.of("\talice\n", "s1\r\n")).isEqualTo("alice:s1");
 	}
 
 	private static String actorOf(String userId) {
