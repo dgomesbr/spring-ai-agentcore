@@ -34,6 +34,9 @@ import software.amazon.awssdk.services.bedrockagentcorecontrol.model.MemoryStrat
 import software.amazon.awssdk.services.bedrockagentcorecontrol.model.ReflectionConfiguration;
 import software.amazon.awssdk.services.bedrockagentcorecontrol.model.StrategyConfiguration;
 
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
@@ -42,7 +45,7 @@ import static org.mockito.BDDMockito.given;
  * Tests for {@link AgentCoreLongTermMemoryStrategyDiscovery}. Focus on how reflection
  * namespaces are extracted from the AWS strategy configuration.
  */
-@ExtendWith(MockitoExtension.class)
+@ExtendWith({ MockitoExtension.class, OutputCaptureExtension.class })
 class AgentCoreLongTermMemoryStrategyDiscoveryTests {
 
 	@Mock
@@ -97,7 +100,7 @@ class AgentCoreLongTermMemoryStrategyDiscoveryTests {
 	}
 
 	@Test
-	void shouldSkipCustomReflectionConfigurationForNow() {
+	void shouldSkipCustomReflectionConfigurationForNow(CapturedOutput output) {
 		// Strategy has a CustomReflectionConfiguration rather than an
 		// EpisodicReflectionConfiguration. Behaviour: log and skip;
 		// reflectionsNamespaces empty.
@@ -119,6 +122,8 @@ class AgentCoreLongTermMemoryStrategyDiscoveryTests {
 			.get(0);
 
 		assertThat(ds.reflectionsNamespaces()).isEmpty();
+		assertThat(output).contains("Strategy 'ep-3' uses customReflectionConfiguration")
+			.contains("agentcore.memory.long-term.episodic.reflections-namespace-pattern");
 	}
 
 	@Test

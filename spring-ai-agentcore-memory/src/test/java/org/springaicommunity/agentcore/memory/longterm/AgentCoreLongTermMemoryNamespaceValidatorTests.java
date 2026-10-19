@@ -39,6 +39,10 @@ import software.amazon.awssdk.services.bedrockagentcorecontrol.model.MemoryStrat
 import software.amazon.awssdk.services.bedrockagentcorecontrol.model.ReflectionConfiguration;
 import software.amazon.awssdk.services.bedrockagentcorecontrol.model.StrategyConfiguration;
 
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
+
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
@@ -51,7 +55,7 @@ import static org.mockito.Mockito.never;
  *
  * @author Yuriy Bezsonov
  */
-@ExtendWith(MockitoExtension.class)
+@ExtendWith({ MockitoExtension.class, OutputCaptureExtension.class })
 @DisplayName("AgentCore Long-Term Memory Namespace Validator Tests")
 class AgentCoreLongTermMemoryNamespaceValidatorTests {
 
@@ -512,12 +516,16 @@ class AgentCoreLongTermMemoryNamespaceValidatorTests {
 
 		@Test
 		@DisplayName("Should validate reflections pattern against a custom reflection override")
-		void shouldPassWhenReflectionsPatternMatchesCustomReflectionOverride() {
+		void shouldPassWhenReflectionsPatternMatchesCustomReflectionOverride(CapturedOutput output) {
 			AgentCoreLongTermMemoryNamespaceValidatorTests.this
 				.mockGetMemoryResponse(List.of(customReflectionStrategy(List.of(REFLECTIONS))));
 
 			AgentCoreLongTermMemoryNamespaceValidatorTests.this.validator.validateNamespaces("test-memory",
 					Map.of("episodic-123", List.of(EPISODES)), Map.of("episodic-123", REFLECTIONS));
+
+			// The auto-discovery hint to set the pattern is wrong here: it is already
+			// set.
+			assertThat(output).doesNotContain("uses customReflectionConfiguration");
 		}
 
 		@Test

@@ -118,6 +118,11 @@ public class AgentCoreLongTermMemoryStrategyDiscovery {
 
 		List<String> reflectionsNamespaces = (type != AgentCoreLongTermMemoryStrategyType.EPISODIC) ? List.of()
 				: extractReflectionsNamespaces(strategy);
+		if (type == AgentCoreLongTermMemoryStrategyType.EPISODIC && usesCustomReflection(strategy)) {
+			logger.info("Strategy '{}' uses customReflectionConfiguration; reflection-namespace auto-discovery "
+					+ "will skip this entry. Configure reflection explicitly via {}.reflections-namespace-pattern.",
+					strategy.strategyId(), AgentCoreLongTermMemoryProperties.Episodic.CONFIG_PREFIX);
+		}
 
 		return new DiscoveredStrategy(strategy.strategyId(), type, List.copyOf(namespaces), reflectionsNamespaces);
 	}
@@ -128,7 +133,8 @@ public class AgentCoreLongTermMemoryStrategyDiscovery {
 	 * chain to extract reflection namespaces for an episodic strategy. Returns an empty
 	 * list when any link is missing or when the reflection variant is
 	 * {@code customReflectionConfiguration} (handled separately, not supported by
-	 * auto-discovery yet).
+	 * auto-discovery yet). Does not log: the namespace validator calls it as well, so
+	 * auto-discovery logs the custom reflection hint itself.
 	 * @param strategy the AWS memory strategy descriptor
 	 * @return the configured reflection namespaces, or empty when not applicable
 	 */
@@ -143,17 +149,19 @@ public class AgentCoreLongTermMemoryStrategyDiscovery {
 		}
 		EpisodicReflectionConfiguration episodic = reflection.episodicReflectionConfiguration();
 		if (episodic == null) {
-			if (reflection.customReflectionConfiguration() != null) {
-				logger.info(
-						"Strategy '{}' uses customReflectionConfiguration; reflection-namespace auto-discovery "
-								+ "will skip this entry. Configure reflection explicitly via "
-								+ "agentcore.memory.long-term.episodic.reflections-namespace-pattern.",
-						strategy.strategyId());
-			}
 			return List.of();
 		}
 		List<String> reflectionNamespaces = episodic.namespaces();
 		return (reflectionNamespaces != null) ? List.copyOf(reflectionNamespaces) : List.of();
+	}
+
+	// A customReflectionConfiguration keeps its namespaces in its
+	// episodicReflectionOverride, which auto-discovery does not read.
+	private static boolean usesCustomReflection(MemoryStrategy strategy) {
+		StrategyConfiguration configuration = strategy.configuration();
+		ReflectionConfiguration reflection = (configuration != null) ? configuration.reflection() : null;
+		return reflection != null && reflection.episodicReflectionConfiguration() == null
+				&& reflection.customReflectionConfiguration() != null;
 	}
 
 	/**
