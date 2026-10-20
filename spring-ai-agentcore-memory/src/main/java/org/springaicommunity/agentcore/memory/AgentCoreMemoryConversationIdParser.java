@@ -33,9 +33,9 @@ package org.springaicommunity.agentcore.memory;
  * parses to actor {@code "tenant"} and session {@code "alice"}. Build the compound form
  * with {@link #of(String, String)}. Both segments are trimmed, as the session repository
  * and {@link #of(String, String)} trim them, so every component derives the same actor
- * and session from a padded id. This class does not check the characters AgentCore
+ * and session from a padded id. {@link #parse} does not check the characters AgentCore
  * accepts in actor and session ids; AgentCore rejects invalid ids when the request is
- * sent.
+ * sent. {@link #of(String, String)} rejects blank parts and control characters up front.
  *
  * <p>
  * <strong>Ownership rule.</strong> The {@code actorId} segment is the user id. When this
@@ -59,6 +59,12 @@ public final class AgentCoreMemoryConversationIdParser {
 	 * Default session ID used when conversationId doesn't include a session.
 	 */
 	public static final String DEFAULT_SESSION = "default-session";
+
+	/**
+	 * Error message for an actor id that {@link #hasBlankPart(String)} rejects.
+	 */
+	public static final String BLANK_ACTOR_PART_MESSAGE = "actor id must not start or end with ':' or contain an "
+			+ "empty part between colons";
 
 	private AgentCoreMemoryConversationIdParser() {
 	}
@@ -130,16 +136,22 @@ public final class AgentCoreMemoryConversationIdParser {
 		String actor = userId.trim();
 		String session = sessionSuffix.trim();
 		if (hasBlankPart(actor)) {
-			throw new IllegalArgumentException(
-					"userId must not start or end with ':' or contain an empty part between colons");
+			throw new IllegalArgumentException(BLANK_ACTOR_PART_MESSAGE);
 		}
 		rejectControlCharacters("userId", actor);
 		rejectControlCharacters("sessionSuffix", session);
 		return actor + ":" + session;
 	}
 
-	// As in ":tenant", "tenant:" or "a::b"; AgentCore never accepts such an actor id.
-	private static boolean hasBlankPart(String actor) {
+	/**
+	 * Whether the actor id is empty or has a blank part between colons, as in
+	 * {@code ":tenant"}, {@code "tenant:"} or {@code "a::b"}. AgentCore never accepts
+	 * such an actor id. Shared by {@link #of(String, String)}, the short-term memory
+	 * repository and the session repository, which live in other packages.
+	 * @param actor the actor id, already trimmed
+	 * @return {@code true} if the actor id is empty or any part between colons is blank
+	 */
+	public static boolean hasBlankPart(String actor) {
 		for (String part : actor.split(":", -1)) {
 			if (part.isBlank()) {
 				return true;

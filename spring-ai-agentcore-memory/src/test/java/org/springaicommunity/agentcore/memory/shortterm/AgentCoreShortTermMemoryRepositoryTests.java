@@ -27,6 +27,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -205,6 +206,27 @@ public class AgentCoreShortTermMemoryRepositoryTests {
 		then(this.client).should().listEvents(listCaptor.capture());
 		assertThat(listCaptor.getValue().actorId()).isEqualTo("tenant:alice");
 		assertThat(listCaptor.getValue().sessionId()).isEqualTo("s1");
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = { ":tenant:alice", "tenant::s1", "a::b::c", " :tenant:s1" })
+	void shouldRejectBlankActorPartBeforeCallingAgentCore(String conversationId) {
+		// Same check as the session repository: AgentCore never accepts such an actor id
+		assertThatThrownBy(() -> this.memoryRepository.findByConversationId(conversationId))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("actor id must not start or end with ':' or contain an empty part between colons");
+		assertThatThrownBy(() -> this.memoryRepository.saveAll(conversationId,
+				List.of(UserMessage.builder().text("hello").build())))
+			.isInstanceOf(IllegalArgumentException.class);
+		then(this.client).shouldHaveNoInteractions();
+	}
+
+	@Test
+	void shouldRejectEmptyActorBeforeCallingAgentCore() {
+		assertThatThrownBy(() -> this.memoryRepository.deleteByConversationId(":s1"))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("has an empty actor segment");
+		then(this.client).shouldHaveNoInteractions();
 	}
 
 	@Test

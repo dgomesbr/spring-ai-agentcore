@@ -144,7 +144,7 @@ class AgentCoreSessionRepositoryAdversarialTests {
 		// The last-colon split keeps a leading or doubled colon inside the actor, where
 		// it leaves a blank part. AgentCore never accepts such an actor id.
 		assertThatThrownBy(() -> this.repository.findById(sessionId)).isInstanceOf(IllegalArgumentException.class)
-			.hasMessageContaining("empty actor segment");
+			.hasMessageContaining("actor id must not start or end with ':' or contain an empty part between colons");
 		then(this.client).should(never()).listEvents(any(ListEventsRequest.class));
 	}
 

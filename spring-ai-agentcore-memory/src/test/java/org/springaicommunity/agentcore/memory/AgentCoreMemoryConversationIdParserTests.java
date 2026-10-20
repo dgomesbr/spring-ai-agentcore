@@ -184,6 +184,17 @@ class AgentCoreMemoryConversationIdParserTests {
 	}
 
 	@Test
+	void hasBlankPartFindsEmptyLeadingTrailingAndDoubledParts() {
+		assertThat(AgentCoreMemoryConversationIdParser.hasBlankPart("")).isTrue();
+		assertThat(AgentCoreMemoryConversationIdParser.hasBlankPart(":tenant")).isTrue();
+		assertThat(AgentCoreMemoryConversationIdParser.hasBlankPart("tenant:")).isTrue();
+		assertThat(AgentCoreMemoryConversationIdParser.hasBlankPart("a::b")).isTrue();
+		assertThat(AgentCoreMemoryConversationIdParser.hasBlankPart("a: :b")).isTrue();
+		assertThat(AgentCoreMemoryConversationIdParser.hasBlankPart("tenant:alice")).isFalse();
+		assertThat(AgentCoreMemoryConversationIdParser.hasBlankPart("alice")).isFalse();
+	}
+
+	@Test
 	void ofRejectsControlCharactersInsideEitherPart() {
 		// The session repository rejects control characters, so of() does too.
 		assertThatThrownBy(() -> AgentCoreMemoryConversationIdParser.of("al\tice", "s1"))
