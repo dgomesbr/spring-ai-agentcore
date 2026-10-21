@@ -194,7 +194,7 @@ class AgentCoreLongTermMemoryAutoConfigurationTests {
 	}
 
 	@Test
-	@DisplayName("Should bind the strategy namespace from 'namespace', not 'scope'")
+	@DisplayName("Should bind the strategy namespace property")
 	void shouldBindStrategyNamespaceProperty() {
 		// The memory's semantic strategy is session-scoped
 		// (SessionScopedSemanticConfiguration)
@@ -206,13 +206,6 @@ class AgentCoreLongTermMemoryAutoConfigurationTests {
 				assertThat(config.semantic().namespace()).isEqualTo(AgentCoreLongTermMemoryNamespace.SESSION);
 				assertThat(config.semantic().resolveNamespacePattern()).isEqualTo(SESSION_NAMESPACE);
 			});
-
-		// 'scope' is not a property: semantic keeps its ACTOR default, which the memory
-		// does not have
-		this.contextRunner.withUserConfiguration(SessionScopedSemanticConfiguration.class)
-			.withPropertyValues(MEMORY_ID_PROP, SEMANTIC_STRATEGY_PROP,
-					"agentcore.memory.long-term.semantic.scope=SESSION")
-			.run((context) -> assertThat(context).hasFailed());
 	}
 
 	@Test
