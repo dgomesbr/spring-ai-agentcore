@@ -51,9 +51,10 @@ public class AgentCoreLongTermMemoryRetriever {
 
 	/**
 	 * Maximum number of {@code ListMemoryRecords} pages read per listing. Caps the round
-	 * trips and the number of records that end up in the prompt.
+	 * trips and the number of records that end up in the prompt: every listed preference
+	 * is sent with every request, so 200 records already cost thousands of tokens.
 	 */
-	static final int MAX_LIST_PAGES = 10;
+	static final int MAX_LIST_PAGES = 2;
 
 	private final BedrockAgentCoreClient client;
 
@@ -99,12 +100,14 @@ public class AgentCoreLongTermMemoryRetriever {
 	 * List all memories for an actor (no semantic search). Used for preferences.
 	 *
 	 * <p>
-	 * Follows {@code nextToken} through the {@code ListMemoryRecords} pages. Stops after
-	 * 10 pages of 100 records and logs a warning if more records remain.
+	 * Follows {@code nextToken} through the {@code ListMemoryRecords} pages, up to a
+	 * fixed number of pages of the largest page size the service accepts, and logs a
+	 * warning if more records remain. The cap counts records read, including records the
+	 * namespace filter then drops.
 	 * @param strategyId the memory strategy id
 	 * @param actorId the actor id
 	 * @param namespacePattern the namespace pattern to scope the listing
-	 * @return the matching memory records, at most 1,000
+	 * @return the matching memory records among those read
 	 */
 	public List<MemoryRecord> listMemories(String strategyId, String actorId, String namespacePattern) {
 		String namespace = AgentCoreLongTermMemoryNamespace.buildNamespace(namespacePattern, strategyId, actorId, null);
@@ -131,8 +134,8 @@ public class AgentCoreLongTermMemoryRetriever {
 			while (nextToken != null && pages < MAX_LIST_PAGES);
 
 			if (nextToken != null) {
-				logger.warn("Stopped listing memories after {} pages and skipped the remaining records: namespace={}",
-						pages, namespace);
+				logger.warn("Stopped listing memories after {} pages ({} records); more remain: namespace={}", pages,
+						summaries.size(), namespace);
 			}
 			List<MemoryRecord> records = this.extractRecords(summaries, namespace);
 			logger.debug("Found {} memories in namespace: {}", records.size(), namespace);

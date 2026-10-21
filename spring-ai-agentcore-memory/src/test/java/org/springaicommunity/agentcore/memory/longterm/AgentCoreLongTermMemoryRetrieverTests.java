@@ -267,20 +267,20 @@ class AgentCoreLongTermMemoryRetrieverTests {
 		// Given
 		given(this.client.listMemoryRecords(any(ListMemoryRecordsRequest.class))).willReturn(
 				page("token-2", record("pref-1", ACTOR_NAMESPACE), record("pref-2", ACTOR_NAMESPACE)),
-				page("token-3", record("pref-3", ACTOR_NAMESPACE)), page(null, record("pref-4", ACTOR_NAMESPACE)));
+				page(null, record("pref-3", ACTOR_NAMESPACE)));
 
 		// When
 		List<MemoryRecord> records = this.retriever.listMemories("strategy-123", "user-456",
 				AgentCoreLongTermMemoryNamespace.ACTOR.getPattern());
 
 		// Then
-		assertThat(records).extracting(MemoryRecord::id).containsExactly("pref-1", "pref-2", "pref-3", "pref-4");
+		assertThat(records).extracting(MemoryRecord::id).containsExactly("pref-1", "pref-2", "pref-3");
 
 		ArgumentCaptor<ListMemoryRecordsRequest> captor = ArgumentCaptor.forClass(ListMemoryRecordsRequest.class);
-		then(this.client).should(times(3)).listMemoryRecords(captor.capture());
+		then(this.client).should(times(2)).listMemoryRecords(captor.capture());
 
 		assertThat(captor.getAllValues()).extracting(ListMemoryRecordsRequest::nextToken)
-			.containsExactly(null, "token-2", "token-3");
+			.containsExactly(null, "token-2");
 		assertThat(captor.getAllValues()).allSatisfy((request) -> {
 			assertThat(request.memoryId()).isEqualTo("test-memory-id");
 			assertThat(request.namespace()).isEqualTo(ACTOR_NAMESPACE);
@@ -291,12 +291,12 @@ class AgentCoreLongTermMemoryRetrieverTests {
 
 	@Test
 	void shouldFilterListedRecordsOnEveryPage() {
-		// Given: the second page holds only records of a prefix-sharing actor
+		// Given: the first page holds only records of a prefix-sharing actor
 		var otherActor = "/strategies/strategy-123/actors/user-4567";
 		given(this.client.listMemoryRecords(any(ListMemoryRecordsRequest.class))).willReturn(
-				page("token-2", record("own-1", ACTOR_NAMESPACE), record("other-1", otherActor)),
-				page("token-3", record("other-2", otherActor)),
-				page(null, record("other-3", otherActor), record("own-2", SESSION_NAMESPACE)));
+				page("token-2", record("other-1", otherActor), record("other-2", otherActor)),
+				page(null, record("other-3", otherActor), record("own-1", ACTOR_NAMESPACE),
+						record("own-2", SESSION_NAMESPACE)));
 
 		// When
 		List<MemoryRecord> records = this.retriever.listMemories("strategy-123", "user-456",
@@ -304,7 +304,7 @@ class AgentCoreLongTermMemoryRetrieverTests {
 
 		// Then: a page that the filter empties does not end the listing
 		assertThat(records).extracting(MemoryRecord::id).containsExactly("own-1", "own-2");
-		then(this.client).should(times(3)).listMemoryRecords(any(ListMemoryRecordsRequest.class));
+		then(this.client).should(times(2)).listMemoryRecords(any(ListMemoryRecordsRequest.class));
 	}
 
 	@Test
@@ -320,8 +320,9 @@ class AgentCoreLongTermMemoryRetrieverTests {
 		assertThat(records).hasSize(AgentCoreLongTermMemoryRetriever.MAX_LIST_PAGES);
 		then(this.client).should(times(AgentCoreLongTermMemoryRetriever.MAX_LIST_PAGES))
 			.listMemoryRecords(any(ListMemoryRecordsRequest.class));
-		assertThat(output)
-			.contains("Stopped listing memories after " + AgentCoreLongTermMemoryRetriever.MAX_LIST_PAGES + " pages");
+		// One record per stubbed page
+		assertThat(output).contains("Stopped listing memories after " + AgentCoreLongTermMemoryRetriever.MAX_LIST_PAGES
+				+ " pages (" + AgentCoreLongTermMemoryRetriever.MAX_LIST_PAGES + " records); more remain");
 	}
 
 	@Test
