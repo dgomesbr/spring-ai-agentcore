@@ -16,7 +16,7 @@
 
 package org.springaicommunity.agentcore.memory.longterm;
 
-import java.util.Set;
+import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -48,9 +48,13 @@ public enum AgentCoreLongTermMemoryNamespace {
 	 */
 	SESSION("/strategies/{memoryStrategyId}/actors/{actorId}/sessions/{sessionId}");
 
-	private static final Pattern PLACEHOLDER = Pattern.compile("\\{[^}]*}");
+	/**
+	 * The placeholders {@link #buildNamespace} fills. The namespace validator uses this
+	 * list too, so it is kept in one place.
+	 */
+	static final List<String> FILLED_PLACEHOLDERS = List.of("{memoryStrategyId}", "{actorId}", "{sessionId}");
 
-	private static final Set<String> FILLED_PLACEHOLDERS = Set.of("{memoryStrategyId}", "{actorId}", "{sessionId}");
+	private static final Pattern PLACEHOLDER = Pattern.compile("\\{[^}]*}");
 
 	private final String pattern;
 
