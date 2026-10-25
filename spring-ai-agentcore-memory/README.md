@@ -407,6 +407,8 @@ agentcore:
 | `ACTOR` | `/strategies/{memoryStrategyId}/actors/{actorId}` | Search across all sessions for the user |
 | `SESSION` | `/strategies/{memoryStrategyId}/actors/{actorId}/sessions/{sessionId}` | Search only current session |
 
+AgentCore Memory matches the namespace of a retrieval request as a string prefix. The library therefore sends the resolved namespace with a trailing `/` (for example `/strategies/abc123/actors/alice/`), the form in which AgentCore Memory stores namespaces, so a request for actor `alice` does not match the records of actor `alice2`. Use this form in IAM policies that restrict the `bedrock-agentcore:namespace` condition key.
+
 #### Custom Namespace Patterns
 
 You can override the default namespace patterns with custom ones using the `namespace-pattern` property:

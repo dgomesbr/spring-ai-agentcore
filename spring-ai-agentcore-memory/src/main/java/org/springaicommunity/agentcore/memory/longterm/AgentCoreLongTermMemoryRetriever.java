@@ -36,9 +36,11 @@ import software.amazon.awssdk.services.bedrockagentcore.model.SearchCriteria;
  *
  * <p>
  * AgentCore Memory matches the request namespace as a plain string prefix, so a request
- * for actor {@code alice} also returns records stored under actor {@code alice2}. Results
- * are therefore filtered client-side to records whose namespace equals the requested
- * namespace or lies beneath it at a {@code /} boundary.
+ * for actor {@code alice} would also return records stored under actor {@code alice2}.
+ * The request namespace therefore ends with {@code /}, the form in which AgentCore Memory
+ * stores namespaces, so the match stops at a segment boundary. Results are still filtered
+ * client-side to records whose namespace equals the requested namespace or lies beneath
+ * it at a {@code /} boundary.
  *
  * @author Yuriy Bezsonov
  */
@@ -78,8 +80,7 @@ public class AgentCoreLongTermMemoryRetriever {
 	 */
 	public List<MemoryRecord> searchMemories(String strategyId, String actorId, String sessionId, String query,
 			int topK, String namespacePattern) {
-		String namespace = AgentCoreLongTermMemoryNamespace.buildNamespace(namespacePattern, strategyId, actorId,
-				sessionId);
+		String namespace = requestNamespace(namespacePattern, strategyId, actorId, sessionId);
 		return this.doSearch(namespace, strategyId, query, topK);
 	}
 
@@ -110,7 +111,7 @@ public class AgentCoreLongTermMemoryRetriever {
 	 * @return the matching memory records among those read
 	 */
 	public List<MemoryRecord> listMemories(String strategyId, String actorId, String namespacePattern) {
-		String namespace = AgentCoreLongTermMemoryNamespace.buildNamespace(namespacePattern, strategyId, actorId, null);
+		String namespace = requestNamespace(namespacePattern, strategyId, actorId, null);
 		logger.debug("Listing memories: namespace={}", namespace);
 
 		try {
@@ -194,20 +195,35 @@ public class AgentCoreLongTermMemoryRetriever {
 	}
 
 	/**
+	 * Resolves the namespace pattern and ends the result with {@code /}, so that the
+	 * prefix match of AgentCore Memory stops at a segment boundary. Without it, actor
+	 * {@code alice} would match the records of actor {@code alice2}.
+	 * @param pattern the namespace pattern
+	 * @param strategyId the memory strategy id
+	 * @param actorId the actor id
+	 * @param sessionId the session id, or {@code null} if the pattern has none
+	 * @return the namespace to send to AgentCore Memory
+	 */
+	private static String requestNamespace(String pattern, String strategyId, String actorId, String sessionId) {
+		String namespace = AgentCoreLongTermMemoryNamespace.buildNamespace(pattern, strategyId, actorId, sessionId);
+		return (namespace.endsWith("/")) ? namespace : namespace + "/";
+	}
+
+	/**
 	 * Whether any of the record's namespaces is the requested namespace or a descendant
 	 * of it. Records without namespaces are rejected.
 	 * @param summary the memory record returned by the service
-	 * @param namespace the resolved namespace that was requested
+	 * @param namespace the requested namespace, ending with {@code /}
 	 * @return {@code true} if the record belongs to the requested namespace
 	 */
 	private static boolean isInNamespace(MemoryRecordSummary summary, String namespace) {
 		if (!summary.hasNamespaces()) {
 			return false;
 		}
-		String parent = (namespace.endsWith("/")) ? namespace : namespace + "/";
+		// A record namespace may lack the trailing '/'
 		return summary.namespaces()
 			.stream()
-			.anyMatch((actual) -> actual != null && (actual.equals(namespace) || actual.startsWith(parent)));
+			.anyMatch((actual) -> actual != null && (actual.startsWith(namespace) || namespace.equals(actual + "/")));
 	}
 
 	public record MemoryRecord(String id, String content, double score) {

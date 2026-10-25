@@ -285,6 +285,27 @@ class AgentCoreLongTermMemoryNamespaceValidatorTests {
 	}
 
 	@Test
+	@DisplayName("Should pass validation when the memory namespaces end with a slash")
+	void shouldPassValidationWhenMemoryNamespacesEndWithSlash() {
+		// Given - AgentCore Memory stores namespaces with a trailing slash
+		MemoryStrategy semantic = MemoryStrategy.builder()
+			.strategyId("semantic-123")
+			.namespaces(List.of("/strategies/{memoryStrategyId}/actors/{actorId}/"))
+			.build();
+		MemoryStrategy summary = MemoryStrategy.builder()
+			.strategyId("summary-456")
+			.namespaces(List.of("/strategies/{memoryStrategyId}/actors/{actorId}/sessions/{sessionId}/"))
+			.build();
+
+		this.mockGetMemoryResponse(List.of(semantic, summary));
+
+		// When/Then - no exception
+		this.validator.validateNamespaces("test-memory",
+				Map.of("semantic-123", List.of(AgentCoreLongTermMemoryNamespace.ACTOR.getPattern()), "summary-456",
+						List.of(AgentCoreLongTermMemoryNamespace.SESSION.getPattern())));
+	}
+
+	@Test
 	@DisplayName("Should pass validation for custom namespace pattern")
 	void shouldPassValidationForCustomNamespacePattern() {
 		// Given - custom namespace pattern in both AWS and config
