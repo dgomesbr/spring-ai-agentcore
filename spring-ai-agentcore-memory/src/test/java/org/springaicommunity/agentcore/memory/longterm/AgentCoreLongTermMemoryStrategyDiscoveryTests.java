@@ -34,6 +34,9 @@ import software.amazon.awssdk.services.bedrockagentcorecontrol.model.MemoryStrat
 import software.amazon.awssdk.services.bedrockagentcorecontrol.model.ReflectionConfiguration;
 import software.amazon.awssdk.services.bedrockagentcorecontrol.model.StrategyConfiguration;
 
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
@@ -42,7 +45,7 @@ import static org.mockito.BDDMockito.given;
  * Tests for {@link AgentCoreLongTermMemoryStrategyDiscovery}. Focus on how reflection
  * namespaces are extracted from the AWS strategy configuration.
  */
-@ExtendWith(MockitoExtension.class)
+@ExtendWith({ MockitoExtension.class, OutputCaptureExtension.class })
 class AgentCoreLongTermMemoryStrategyDiscoveryTests {
 
 	@Mock
@@ -78,6 +81,31 @@ class AgentCoreLongTermMemoryStrategyDiscoveryTests {
 	}
 
 	@Test
+	void shouldFallBackToReflectionNamespaceTemplates() {
+		// AWS marks namespaces as legacy; a memory may only report namespaceTemplates.
+		MemoryStrategy strategy = MemoryStrategy.builder()
+			.strategyId("ep-4")
+			.type(MemoryStrategyType.EPISODIC)
+			.namespaces(List.of("/strategy/{memoryStrategyId}/actor/{actorId}/"))
+			.configuration(StrategyConfiguration.builder()
+				.reflection(ReflectionConfiguration.builder()
+					.episodicReflectionConfiguration(EpisodicReflectionConfiguration.builder()
+						.namespaceTemplates("/strategy/{memoryStrategyId}/")
+						.build())
+					.build())
+				.build())
+			.build();
+
+		this.mockGetMemory(List.of(strategy));
+
+		DiscoveredStrategy ds = new AgentCoreLongTermMemoryStrategyDiscovery(this.controlClient)
+			.discoverStrategies("mem-1")
+			.get(0);
+
+		assertThat(ds.reflectionsNamespaces()).containsExactly("/strategy/{memoryStrategyId}/");
+	}
+
+	@Test
 	void shouldReturnEmptyReflectionsForEpisodicWithoutReflectionConfig() {
 		MemoryStrategy strategy = MemoryStrategy.builder()
 			.strategyId("ep-2")
@@ -97,7 +125,7 @@ class AgentCoreLongTermMemoryStrategyDiscoveryTests {
 	}
 
 	@Test
-	void shouldSkipCustomReflectionConfigurationForNow() {
+	void shouldSkipCustomReflectionConfigurationForNow(CapturedOutput output) {
 		// Strategy has a CustomReflectionConfiguration rather than an
 		// EpisodicReflectionConfiguration. Behaviour: log and skip;
 		// reflectionsNamespaces empty.
@@ -119,6 +147,8 @@ class AgentCoreLongTermMemoryStrategyDiscoveryTests {
 			.get(0);
 
 		assertThat(ds.reflectionsNamespaces()).isEmpty();
+		assertThat(output).contains("Strategy 'ep-3' uses customReflectionConfiguration")
+			.contains("agentcore.memory.long-term.episodic.reflections-namespace-pattern");
 	}
 
 	@Test

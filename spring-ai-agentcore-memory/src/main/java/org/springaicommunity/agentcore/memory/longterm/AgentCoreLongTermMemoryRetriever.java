@@ -46,6 +46,16 @@ public class AgentCoreLongTermMemoryRetriever {
 
 	private static final Logger logger = LoggerFactory.getLogger(AgentCoreLongTermMemoryRetriever.class);
 
+	/** Largest {@code maxResults} that {@code ListMemoryRecords} accepts (default 20). */
+	private static final int SERVICE_MAX_RESULTS = 100;
+
+	/**
+	 * Maximum number of {@code ListMemoryRecords} pages read per listing. Caps the round
+	 * trips and the number of records that end up in the prompt: every listed preference
+	 * is sent with every request, so 200 records already cost thousands of tokens.
+	 */
+	static final int MAX_LIST_PAGES = 2;
+
 	private final BedrockAgentCoreClient client;
 
 	private final String memoryId;
@@ -88,11 +98,12 @@ public class AgentCoreLongTermMemoryRetriever {
 
 	/**
 	 * List all memories for an actor (no semantic search), for a namespace pattern
-	 * without {@code {sessionId}}.
+	 * without {@code {sessionId}}. Delegates to
+	 * {@link #listMemories(String, String, String, String)} with a {@code null} session.
 	 * @param strategyId the memory strategy id
 	 * @param actorId the actor id
 	 * @param namespacePattern the namespace pattern to scope the listing
-	 * @return all matching memory records
+	 * @return the matching memory records among those read
 	 */
 	public List<MemoryRecord> listMemories(String strategyId, String actorId, String namespacePattern) {
 		return this.listMemories(strategyId, actorId, null, namespacePattern);
@@ -100,11 +111,17 @@ public class AgentCoreLongTermMemoryRetriever {
 
 	/**
 	 * List all memories for an actor (no semantic search). Used for preferences.
+	 *
+	 * <p>
+	 * Follows {@code nextToken} through the {@code ListMemoryRecords} pages, up to a
+	 * fixed number of pages of the largest page size the service accepts, and logs a
+	 * warning if more records remain. The cap counts records read, including records the
+	 * namespace filter then drops.
 	 * @param strategyId the memory strategy id
 	 * @param actorId the actor id
 	 * @param sessionId the session id (required if the pattern contains {sessionId})
 	 * @param namespacePattern the namespace pattern to scope the listing
-	 * @return all matching memory records
+	 * @return the matching memory records among those read
 	 */
 	public List<MemoryRecord> listMemories(String strategyId, String actorId, String sessionId,
 			String namespacePattern) {
@@ -113,14 +130,30 @@ public class AgentCoreLongTermMemoryRetriever {
 		logger.debug("Listing memories: namespace={}", namespace);
 
 		try {
-			ListMemoryRecordsRequest request = ListMemoryRecordsRequest.builder()
-				.memoryId(this.memoryId)
-				.namespace(namespace)
-				.memoryStrategyId(strategyId)
-				.build();
+			List<MemoryRecordSummary> summaries = new ArrayList<>();
+			String nextToken = null;
+			int pages = 0;
+			do {
+				ListMemoryRecordsRequest request = ListMemoryRecordsRequest.builder()
+					.memoryId(this.memoryId)
+					.namespace(namespace)
+					.memoryStrategyId(strategyId)
+					.maxResults(SERVICE_MAX_RESULTS)
+					.nextToken(nextToken)
+					.build();
 
-			ListMemoryRecordsResponse response = this.client.listMemoryRecords(request);
-			List<MemoryRecord> records = this.extractRecords(response.memoryRecordSummaries(), namespace);
+				ListMemoryRecordsResponse response = this.client.listMemoryRecords(request);
+				summaries.addAll(response.memoryRecordSummaries());
+				nextToken = response.nextToken();
+				pages++;
+			}
+			while (nextToken != null && pages < MAX_LIST_PAGES);
+
+			if (nextToken != null) {
+				logger.warn("Stopped listing memories after {} pages ({} records); more remain: namespace={}", pages,
+						summaries.size(), namespace);
+			}
+			List<MemoryRecord> records = this.extractRecords(summaries, namespace);
 			logger.debug("Found {} memories in namespace: {}", records.size(), namespace);
 			return records;
 		}
