@@ -16,6 +16,7 @@
 
 package org.springaicommunity.agentcore.memory.longterm;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
@@ -25,9 +26,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springaicommunity.agentcore.memory.AgentCoreMemoryException;
 import software.amazon.awssdk.services.bedrockagentcorecontrol.BedrockAgentCoreControlClient;
+import software.amazon.awssdk.services.bedrockagentcorecontrol.model.CustomReflectionConfiguration;
+import software.amazon.awssdk.services.bedrockagentcorecontrol.model.EpisodicReflectionOverride;
 import software.amazon.awssdk.services.bedrockagentcorecontrol.model.GetMemoryRequest;
 import software.amazon.awssdk.services.bedrockagentcorecontrol.model.GetMemoryResponse;
 import software.amazon.awssdk.services.bedrockagentcorecontrol.model.MemoryStrategy;
+import software.amazon.awssdk.services.bedrockagentcorecontrol.model.ReflectionConfiguration;
+import software.amazon.awssdk.services.bedrockagentcorecontrol.model.StrategyConfiguration;
 
 /**
  * Validates that memory strategy namespaces match the expected format required by
@@ -54,6 +59,8 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 
 	private static final Logger logger = LoggerFactory.getLogger(AgentCoreLongTermMemoryNamespaceValidator.class);
 
+	private static final String STRATEGY_ID_PLACEHOLDER = "{memoryStrategyId}";
+
 	private static final Pattern PLACEHOLDER = Pattern.compile("\\{[^}]*}");
 
 	private static final List<String> SUPPORTED_PLACEHOLDERS = List.of("{memoryStrategyId}", "{actorId}",
@@ -65,17 +72,36 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 
 	private final boolean autoRegister;
 
+	private final Map<String, AgentCoreLongTermMemoryStrategyType> configuredTypes;
+
 	public AgentCoreLongTermMemoryNamespaceValidator(BedrockAgentCoreControlClient controlClient,
 			AgentCoreLongTermMemoryNamespaceRegistrar registrar, boolean autoRegister) {
-		this.controlClient = controlClient;
-		this.registrar = registrar;
-		this.autoRegister = autoRegister;
+		this(controlClient, registrar, autoRegister, Map.of());
 	}
 
 	/**
-	 * Validates namespace configuration for all configured strategies. Each strategy may
-	 * map to one or more expected namespace patterns (e.g. episodic strategies with
-	 * reflections have two namespaces under the same strategy id).
+	 * Creates a validator that also checks each strategy's type against the group it is
+	 * configured under.
+	 * @param controlClient the AgentCore control-plane client
+	 * @param registrar the namespace registrar used when auto-registration is on
+	 * @param autoRegister whether to register mismatching namespaces
+	 * @param configuredTypes the strategy type each strategy ID is configured as, keyed
+	 * by strategy ID; IDs without an entry are not type-checked
+	 */
+	public AgentCoreLongTermMemoryNamespaceValidator(BedrockAgentCoreControlClient controlClient,
+			AgentCoreLongTermMemoryNamespaceRegistrar registrar, boolean autoRegister,
+			Map<String, AgentCoreLongTermMemoryStrategyType> configuredTypes) {
+		this.controlClient = controlClient;
+		this.registrar = registrar;
+		this.autoRegister = autoRegister;
+		this.configuredTypes = Map.copyOf(configuredTypes);
+	}
+
+	/**
+	 * Validates namespace configuration for all configured strategies. Each strategy maps
+	 * to its expected namespace patterns. AWS gives a strategy exactly one namespace, so
+	 * configure one pattern per strategy; episodic reflection namespaces are validated
+	 * separately (see {@link #validateNamespaces(String, Map, Map)}).
 	 * @param memoryId the memory resource ID
 	 * @param namespacesByStrategy map of strategy ID to its list of expected namespace
 	 * patterns
@@ -91,7 +117,9 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 	 * reflection namespaces of episodic strategies. Reflection namespaces live in the
 	 * strategy's reflection configuration, not in its namespaces, so they are validated
 	 * against those and are never auto-registered (registration writes the strategy's
-	 * episode namespaces).
+	 * episode namespaces). With auto-registration, a mismatching pattern is registered
+	 * only if it contains {@code {actorId}}, and only after every check has passed, so a
+	 * failed validation never changes the memory.
 	 * @param memoryId the memory resource ID
 	 * @param namespacesByStrategy map of strategy ID to its list of expected namespace
 	 * patterns
@@ -117,21 +145,27 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 					"Memory '" + memoryId + "' has no strategies configured. " + "LTM requires at least one strategy.");
 		}
 
+		List<Registration> registrations = new ArrayList<>();
 		for (Map.Entry<String, List<String>> entry : namespacesByStrategy.entrySet()) {
 			String strategyId = entry.getKey();
 			List<String> expectedPatterns = entry.getValue();
-			this.validateStrategy(memoryId, strategies, strategyId, expectedPatterns);
+			this.validateStrategy(memoryId, strategies, strategyId, expectedPatterns, registrations);
 		}
 		for (Map.Entry<String, String> entry : reflectionNamespacesByStrategy.entrySet()) {
 			this.validateReflections(memoryId, strategies, entry.getKey(), entry.getValue());
+		}
+		// Registration writes to AWS, so it waits until every check above has passed.
+		for (Registration registration : registrations) {
+			this.registrar.registerNamespace(memoryId, registration.strategyId(), registration.namespacePattern());
 		}
 
 		logger.info("Namespace validation passed for {} strategies", namespacesByStrategy.size());
 	}
 
 	private void validateStrategy(String memoryId, List<MemoryStrategy> strategies, String strategyId,
-			List<String> expectedPatterns) {
+			List<String> expectedPatterns, List<Registration> registrations) {
 		MemoryStrategy strategy = findStrategy(memoryId, strategies, strategyId);
+		this.requireConfiguredType(memoryId, strategy);
 
 		List<String> actualNamespaces = strategy.namespaces();
 		if (actualNamespaces == null || actualNamespaces.isEmpty()) {
@@ -141,14 +175,18 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 
 		// Every expected pattern must match at least one actual namespace.
 		for (String expected : expectedPatterns) {
-			boolean matched = actualNamespaces.stream().anyMatch((actual) -> this.matchesPattern(actual, expected));
+			requireFillablePlaceholders(strategyId, expected);
+			boolean matched = actualNamespaces.stream()
+				.anyMatch((actual) -> this.matchesPattern(actual, expected, strategyId));
 			if (!matched) {
-				if (this.autoRegister) {
-					this.registrar.registerNamespace(memoryId, strategyId, expected);
+				// Registering a pattern without {actorId} would make all actors share
+				// one namespace, so such a mismatch fails even with auto-registration.
+				if (this.autoRegister && isSupported(expected)) {
+					registrations.add(new Registration(strategyId, expected));
 				}
 				else {
-					throw new AgentCoreMemoryException.ConfigurationException(
-							this.buildErrorMessage(strategy, actualNamespaces, expected));
+					String message = this.buildErrorMessage(strategy, actualNamespaces, expected);
+					throw new AgentCoreMemoryException.ConfigurationException(message + this.notRegisteredHint());
 				}
 			}
 		}
@@ -159,9 +197,11 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 
 	private void validateReflections(String memoryId, List<MemoryStrategy> strategies, String strategyId,
 			String expectedPattern) {
+		requireFillablePlaceholders(strategyId, expectedPattern);
 		MemoryStrategy strategy = findStrategy(memoryId, strategies, strategyId);
-		List<String> actualNamespaces = AgentCoreLongTermMemoryStrategyDiscovery.extractReflectionsNamespaces(strategy);
-		boolean matched = actualNamespaces.stream().anyMatch((actual) -> this.matchesPattern(actual, expectedPattern));
+		List<String> actualNamespaces = reflectionNamespaces(strategy);
+		boolean matched = actualNamespaces.stream()
+			.anyMatch((actual) -> this.matchesPattern(actual, expectedPattern, strategyId));
 		if (!matched) {
 			String header = String.format("Reflection namespace mismatch for episodic strategy '%s'.%n"
 					+ "  In AWS Memory:    %s%n" + "  In Spring Config: %s%n%n", strategyId, actualNamespaces,
@@ -191,7 +231,25 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 							+ strategies.stream().map(MemoryStrategy::strategyId).toList()));
 	}
 
-	private boolean matchesPattern(String actual, String expected) {
+	// Reflection namespaces live in episodicReflectionConfiguration, or in the
+	// episodicReflectionOverride of a customReflectionConfiguration.
+	private static List<String> reflectionNamespaces(MemoryStrategy strategy) {
+		List<String> episodic = AgentCoreLongTermMemoryStrategyDiscovery.extractReflectionsNamespaces(strategy);
+		if (!episodic.isEmpty()) {
+			return episodic;
+		}
+		StrategyConfiguration configuration = strategy.configuration();
+		ReflectionConfiguration reflection = (configuration != null) ? configuration.reflection() : null;
+		CustomReflectionConfiguration custom = (reflection != null) ? reflection.customReflectionConfiguration() : null;
+		EpisodicReflectionOverride override = (custom != null) ? custom.episodicReflectionOverride() : null;
+		return (override != null) ? AgentCoreLongTermMemoryStrategyDiscovery
+			.namespacesOrTemplates(override.namespaces(), override.namespaceTemplates()) : List.of();
+	}
+
+	// Placeholders are filled at retrieval time, so a placeholder only matches the same
+	// placeholder: a swapped {actorId}/{sessionId} would read another scope's records.
+	// A literal in AWS matches a placeholder only when it is this strategy's resolved id.
+	private boolean matchesPattern(String actual, String expected, String strategyId) {
 		String[] actualParts = actual.split("/");
 		String[] expectedParts = expected.split("/");
 
@@ -201,7 +259,13 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 
 		for (int i = 0; i < expectedParts.length; i++) {
 			String expectedPart = expectedParts[i];
-			if (!this.isPlaceholder(expectedPart) && !expectedPart.equals(actualParts[i])) {
+			String actualPart = actualParts[i];
+			if (!this.isPlaceholder(expectedPart) || this.isPlaceholder(actualPart)) {
+				if (!expectedPart.equals(actualPart)) {
+					return false;
+				}
+			}
+			else if (!STRATEGY_ID_PLACEHOLDER.equals(expectedPart) || !actualPart.equals(strategyId)) {
 				return false;
 			}
 		}
@@ -220,17 +284,40 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 		if (supported == null) {
 			return header + unsupportedNamespaceHint("namespace");
 		}
-		return header
-				+ String.format(
-						"The memory was created with a different namespace format than configured in Spring.%n"
-								+ "Either update the memory namespace or configure the matching pattern in "
-								+ "application.properties:%n  %s.namespace-pattern=%s",
-						configPrefix(strategy), supported);
+		return header + String.format(
+				"The memory was created with a different namespace format than configured in Spring.%n"
+						+ "Either update the memory namespace or configure the matching pattern in "
+						+ "application.properties:%n  %s.namespace-pattern=%s",
+				this.configPrefixFor(strategy), supported);
+	}
+
+	// A strategy ID under another group's property gets that group's handler, and the
+	// mismatch hint would name a property that has no effect, so name the right group.
+	private void requireConfiguredType(String memoryId, MemoryStrategy strategy) {
+		AgentCoreLongTermMemoryStrategyType configured = this.configuredTypes.get(strategy.strategyId());
+		AgentCoreLongTermMemoryStrategyType actual = AgentCoreLongTermMemoryStrategyType.fromAwsType(strategy.type());
+		// CUSTOM and unknown types can back any group
+		if (configured != null && actual != null && configured != actual) {
+			throw new AgentCoreMemoryException.ConfigurationException(String.format(
+					"Strategy '%s' is a %s strategy in memory '%s', but it is configured as %s.strategy-id. "
+							+ "Configure it as %s.strategy-id instead.",
+					strategy.strategyId(), strategy.type(), memoryId, configPrefix(configured), configPrefix(actual)));
+		}
+	}
+
+	// Prefer the group the ID is configured under: that is the property the user can set
+	private String configPrefixFor(MemoryStrategy strategy) {
+		AgentCoreLongTermMemoryStrategyType configured = this.configuredTypes.get(strategy.strategyId());
+		return (configured != null) ? configPrefix(configured) : configPrefix(strategy);
 	}
 
 	// The property prefix of the strategy's config, derived from its AWS type
 	private static String configPrefix(MemoryStrategy strategy) {
-		AgentCoreLongTermMemoryStrategyType type = AgentCoreLongTermMemoryStrategyType.fromAwsType(strategy.type());
+		return configPrefix(AgentCoreLongTermMemoryStrategyType.fromAwsType(strategy.type()));
+	}
+
+	// The property prefix of a strategy group; CUSTOM and unknown types have none
+	static String configPrefix(AgentCoreLongTermMemoryStrategyType type) {
 		if (type == null) {
 			return AgentCoreLongTermMemoryProperties.CONFIG_PREFIX + ".<strategy>";
 		}
@@ -269,6 +356,29 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 		return "The " + what + " of the memory cannot be used: it must contain {actorId} and may only use the "
 				+ "placeholders " + SUPPORTED_PLACEHOLDERS + ". Change the " + what
 				+ " of the memory strategy with the AWS console, CLI or your infrastructure tooling.";
+	}
+
+	// Why auto-registration skipped a mismatching pattern; empty when it is off.
+	private String notRegisteredHint() {
+		return (this.autoRegister) ? String.format("%n%nThe configured pattern was not registered automatically: it "
+				+ "does not contain {actorId}, so all actors would share its records.") : "";
+	}
+
+	// Retrieval fills only the supported placeholders. Any other one, such as a custom
+	// namespace key, would reach AWS as literal braces and fail every retrieval.
+	private static void requireFillablePlaceholders(String strategyId, String pattern) {
+		Matcher matcher = PLACEHOLDER.matcher(pattern);
+		while (matcher.find()) {
+			if (!SUPPORTED_PLACEHOLDERS.contains(matcher.group())) {
+				throw new AgentCoreMemoryException.ConfigurationException(String.format(
+						"Namespace pattern '%s' for strategy '%s' uses the placeholder %s, which retrieval cannot "
+								+ "fill. Supported placeholders: %s.",
+						pattern, strategyId, matcher.group(), SUPPORTED_PLACEHOLDERS));
+			}
+		}
+	}
+
+	private record Registration(String strategyId, String namespacePattern) {
 	}
 
 }

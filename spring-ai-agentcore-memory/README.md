@@ -133,7 +133,11 @@ chatClient.prompt()
 so it derives `Session.userId` from the actor (userId) segment of the sessionId (parsed
 by `AgentCoreMemoryConversationIdParser`). The sessionId format is therefore
 `"userId:sessionSuffix"` (for example `"alice:conv-1"`, where `alice` is the userId).
-When you set `USER_ID_CONTEXT_KEY` per-request, pass the same value as the userId prefix.
+The sessionId is split at its last colon, so the userId may contain colons
+(`"tenant:alice:conv-1"`) but the suffix may not; see
+[Conversation ID Format](#conversation-id-format) for the allowed characters.
+When you set `USER_ID_CONTEXT_KEY` per-request, pass the same value as the userId prefix,
+without surrounding whitespace: both segments of the sessionId are trimmed.
 On the second turn `SessionMemoryAdvisor.before()` runs an ownership check that compares
 `USER_ID_CONTEXT_KEY` against the derived `Session.userId`; a mismatch throws
 `IllegalStateException("...does not belong to user...")`. The usual way to hit this is
@@ -235,7 +239,7 @@ See [issue #152](https://github.com/spring-ai-community/spring-ai-agentcore/issu
 
 ### Long-Term Memory (LTM)
 - **Semantic**: Semantic search for user facts using the current query
-- **User Preference**: Lists ALL stored preferences regardless of query — preferences should always apply
+- **User Preference**: Lists ALL stored preferences regardless of query (reads at most 200 records) — preferences should always apply
 - **Summary**: Semantic search for conversation summaries by session
 - **Episodic**: Semantic search for past interactions and reflections
 
@@ -380,25 +384,25 @@ agentcore:
       semantic:
         strategy-id: ${SEMANTIC_STRATEGY_ID}     # Enables strategy (omit to disable)
         top-k: 3                                 # Default: 3
-        scope: ACTOR                             # Default: ACTOR
+        namespace: ACTOR                         # Default: ACTOR
       user-preference:
         strategy-id: ${USER_PREFERENCE_STRATEGY_ID}  # Enables strategy (no top-k: lists all)
-        scope: ACTOR                             # Default: ACTOR
+        namespace: ACTOR                         # Default: ACTOR
       summary:
         strategy-id: ${SUMMARY_STRATEGY_ID}      # Enables strategy
         top-k: 3                                 # Default: 3
-        scope: SESSION                           # Default: SESSION
+        namespace: SESSION                       # Default: SESSION
       episodic:
         strategy-id: ${EPISODIC_STRATEGY_ID}     # Enables strategy
-        reflections-strategy-id: ${REFLECTIONS_STRATEGY_ID}  # Optional: enables reflections
+        reflections-namespace-pattern: ${REFLECTIONS_NAMESPACE}  # Optional: enables reflections; must match the memory
         episodes-top-k: 3                        # Default: 3
         reflections-top-k: 2                     # Default: 2
-        scope: ACTOR                             # Default: ACTOR
+        namespace: ACTOR                         # Default: ACTOR
 ```
 
-#### Scope Options
+#### Namespace Options
 
-| Scope | Namespace Pattern | Use Case |
+| `namespace` | Namespace Pattern | Use Case |
 |-------|-------------------|----------|
 | `ACTOR` | `/strategies/{memoryStrategyId}/actors/{actorId}` | Search across all sessions for the user |
 | `SESSION` | `/strategies/{memoryStrategyId}/actors/{actorId}/sessions/{sessionId}` | Search only current session |
@@ -423,18 +427,20 @@ Available placeholders:
 - `{actorId}` - The user/actor ID  
 - `{sessionId}` - The session ID (required for session-scoped patterns)
 
-**Note**: Only these predefined placeholders are supported. Custom placeholders are not allowed.
+**Note**: Only these predefined placeholders are supported. Custom placeholders are not allowed: with explicit configuration, startup fails if a pattern uses any other placeholder (for example a custom namespace key), because retrieval cannot fill it.
+
+With explicit configuration (`auto-discovery: false`), startup validation compares placeholders by name, so a pattern that puts `{sessionId}` where the memory has `{actorId}` (or the reverse) fails instead of reading the wrong scope. A placeholder in the pattern does not match a literal segment in the memory, except `{memoryStrategyId}`, which matches a literal equal to the configured strategy ID. All other segments must be identical. The episodic `reflections-namespace-pattern` is checked against the strategy's reflection namespaces, whether they come from `episodicReflectionConfiguration` or from the `episodicReflectionOverride` of a `customReflectionConfiguration`. With the deprecated `namespace.auto-register=true`, a mismatching pattern is registered only if it contains `{actorId}`, and only after all checks have passed.
 
 #### Defaults Summary
 
-| Strategy | top-k | scope |
-|----------|-------|-------|
+| Strategy | top-k | namespace |
+|----------|-------|-----------|
 | semantic | 3 | ACTOR |
-| user-preference | n/a (lists all) | ACTOR |
+| user-preference | n/a (lists all, reads at most 200) | ACTOR |
 | summary | 3 | SESSION |
 | episodic | episodes: 3, reflections: 2 | ACTOR |
 
-Set `enabled: true` to activate LTM, then configure individual strategies. Each strategy is optional - only configure the ones you need. Advisors are auto-created for configured strategies. Set `enabled: false` to temporarily disable all LTM without removing strategy configuration.
+Long-term memory turns on when `auto-discovery` is `true` or when at least one strategy has a `strategy-id`, and advisors are created only for the configured strategies. Each strategy is optional, so configure only the ones you need. There is no separate `enabled` switch.
 
 ## Conversation ID Format
 
@@ -442,6 +448,32 @@ The repository supports flexible conversation ID formats:
 
 - **Simple**: `user123` → actor: `user123`, session: `default-session`
 - **With Session**: `user123:session456` → actor: `user123`, session: `session456`
+
+The conversation ID is split at its **last** colon. AgentCore allows colons inside an actor ID (for example a tenant prefix or a URN-style subject) but never inside a session ID, so `tenant:alice:conv-1` means actor `tenant:alice` and session `conv-1`. Two rules follow from this:
+
+- An actor ID that contains a colon must always come with a session. On its own, `tenant:alice` means actor `tenant` and session `alice`.
+- A session ID cannot contain a colon.
+
+Build compound IDs with `AgentCoreMemoryConversationIdParser.of(userId, sessionSuffix)` rather than by concatenating strings. It trims both parts, accepts colons in the user ID, and throws `IllegalArgumentException` when a part is blank, the session suffix contains a colon, or either part contains a control character:
+
+```java
+String conversationId = AgentCoreMemoryConversationIdParser.of("tenant:alice", "conv-1"); // "tenant:alice:conv-1"
+```
+
+This matters most when the session part comes from the client, such as the `X-Amzn-Bedrock-AgentCore-Runtime-Session-Id` header. Concatenated, a session ID of `bob:x` turns user `alice` into actor `alice:bob`, which can be another user's actor. `of()` rejects that session ID.
+
+### Allowed Characters
+
+AgentCore rejects a request whose actor ID or session ID breaks the rules below (see the [CreateEvent API reference](https://docs.aws.amazon.com/bedrock-agentcore/latest/APIReference/API_CreateEvent.html)).
+
+| ID | Length | Allowed characters |
+|----|--------|--------------------|
+| Actor ID | 1 to 255 | ASCII letters, digits, `-`, `_`, `/` and `:`. Must start with a letter or digit. A colon must be followed by a letter, digit, `-`, `_` or `/`, so an actor ID cannot end with `:` or contain `::`. |
+| Session ID | 1 to 100 | ASCII letters, digits, `-` and `_`. Must start with a letter or digit. |
+
+This module checks a few rules before calling AgentCore. Long-term memory rejects an actor ID that contains `/` or `*`, because the namespace of actor `bob/x` would sit beneath that of actor `bob`. The Session API repository rejects control characters and empty parts (such as a leading colon) up front. Everything else is left to AgentCore.
+
+User IDs from identity providers often break these rules: e-mail addresses contain `@` and `.`, and subjects such as `auth0|123` contain `|`. Map such a subject to a safe, stable value before using it as the actor ID, for example your application's internal user ID or a hex-encoded SHA-256 hash of the subject. Use the same mapped value everywhere the user ID appears, including `SessionMemoryAdvisor.USER_ID_CONTEXT_KEY`.
 
 ## Error Handling
 
