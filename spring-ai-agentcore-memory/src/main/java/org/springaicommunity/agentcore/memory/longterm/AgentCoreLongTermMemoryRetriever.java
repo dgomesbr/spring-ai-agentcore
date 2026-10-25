@@ -97,6 +97,19 @@ public class AgentCoreLongTermMemoryRetriever {
 	}
 
 	/**
+	 * List all memories for an actor (no semantic search), for a namespace pattern
+	 * without {@code {sessionId}}. Delegates to
+	 * {@link #listMemories(String, String, String, String)} with a {@code null} session.
+	 * @param strategyId the memory strategy id
+	 * @param actorId the actor id
+	 * @param namespacePattern the namespace pattern to scope the listing
+	 * @return the matching memory records among those read
+	 */
+	public List<MemoryRecord> listMemories(String strategyId, String actorId, String namespacePattern) {
+		return this.listMemories(strategyId, actorId, null, namespacePattern);
+	}
+
+	/**
 	 * List all memories for an actor (no semantic search). Used for preferences.
 	 *
 	 * <p>
@@ -106,11 +119,14 @@ public class AgentCoreLongTermMemoryRetriever {
 	 * namespace filter then drops.
 	 * @param strategyId the memory strategy id
 	 * @param actorId the actor id
+	 * @param sessionId the session id (required if the pattern contains {sessionId})
 	 * @param namespacePattern the namespace pattern to scope the listing
 	 * @return the matching memory records among those read
 	 */
-	public List<MemoryRecord> listMemories(String strategyId, String actorId, String namespacePattern) {
-		String namespace = AgentCoreLongTermMemoryNamespace.buildNamespace(namespacePattern, strategyId, actorId, null);
+	public List<MemoryRecord> listMemories(String strategyId, String actorId, String sessionId,
+			String namespacePattern) {
+		String namespace = AgentCoreLongTermMemoryNamespace.buildNamespace(namespacePattern, strategyId, actorId,
+				sessionId);
 		logger.debug("Listing memories: namespace={}", namespace);
 
 		try {
