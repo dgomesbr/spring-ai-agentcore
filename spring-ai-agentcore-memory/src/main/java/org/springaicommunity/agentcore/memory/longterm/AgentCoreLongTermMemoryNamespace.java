@@ -16,6 +16,10 @@
 
 package org.springaicommunity.agentcore.memory.longterm;
 
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 /**
  * Predefined namespace patterns for long-term memory strategies.
  *
@@ -43,6 +47,14 @@ public enum AgentCoreLongTermMemoryNamespace {
 	 * the current session.
 	 */
 	SESSION("/strategies/{memoryStrategyId}/actors/{actorId}/sessions/{sessionId}");
+
+	/**
+	 * The placeholders {@link #buildNamespace} fills. The namespace validator uses this
+	 * list too, so it is kept in one place.
+	 */
+	static final List<String> FILLED_PLACEHOLDERS = List.of("{memoryStrategyId}", "{actorId}", "{sessionId}");
+
+	private static final Pattern PLACEHOLDER = Pattern.compile("\\{[^}]*}");
 
 	private final String pattern;
 
@@ -92,6 +104,23 @@ public enum AgentCoreLongTermMemoryNamespace {
 		}
 
 		return namespace;
+	}
+
+	/**
+	 * Returns the first placeholder in a namespace pattern that {@link #buildNamespace}
+	 * does not fill, such as an AgentCore custom namespace key ({@code {orgname}}).
+	 * Retrieval would send it to AgentCore as literal braces, which AgentCore rejects.
+	 * @param pattern the namespace pattern
+	 * @return the unfilled placeholder, or {@code null} if there is none
+	 */
+	static String unfilledPlaceholder(String pattern) {
+		Matcher matcher = PLACEHOLDER.matcher(pattern);
+		while (matcher.find()) {
+			if (!FILLED_PLACEHOLDERS.contains(matcher.group())) {
+				return matcher.group();
+			}
+		}
+		return null;
 	}
 
 }

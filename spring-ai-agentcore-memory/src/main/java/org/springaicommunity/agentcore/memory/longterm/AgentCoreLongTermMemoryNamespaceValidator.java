@@ -19,8 +19,6 @@ package org.springaicommunity.agentcore.memory.longterm;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -60,11 +58,6 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 	private static final Logger logger = LoggerFactory.getLogger(AgentCoreLongTermMemoryNamespaceValidator.class);
 
 	private static final String STRATEGY_ID_PLACEHOLDER = "{memoryStrategyId}";
-
-	private static final Pattern PLACEHOLDER = Pattern.compile("\\{[^}]*}");
-
-	private static final List<String> SUPPORTED_PLACEHOLDERS = List.of("{memoryStrategyId}", "{actorId}",
-			"{sessionId}");
 
 	private final BedrockAgentCoreControlClient controlClient;
 
@@ -340,21 +333,13 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 	}
 
 	private static boolean isSupported(String namespace) {
-		Matcher matcher = PLACEHOLDER.matcher(namespace);
-		boolean hasActor = false;
-		while (matcher.find()) {
-			String placeholder = matcher.group();
-			if (!SUPPORTED_PLACEHOLDERS.contains(placeholder)) {
-				return false;
-			}
-			hasActor |= "{actorId}".equals(placeholder);
-		}
-		return hasActor;
+		return AgentCoreLongTermMemoryNamespace.unfilledPlaceholder(namespace) == null
+				&& namespace.contains("{actorId}");
 	}
 
 	private static String unsupportedNamespaceHint(String what) {
 		return "The " + what + " of the memory cannot be used: it must contain {actorId} and may only use the "
-				+ "placeholders " + SUPPORTED_PLACEHOLDERS + ". Change the " + what
+				+ "placeholders " + AgentCoreLongTermMemoryNamespace.FILLED_PLACEHOLDERS + ". Change the " + what
 				+ " of the memory strategy with the AWS console, CLI or your infrastructure tooling.";
 	}
 
@@ -367,14 +352,12 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 	// Retrieval fills only the supported placeholders. Any other one, such as a custom
 	// namespace key, would reach AWS as literal braces and fail every retrieval.
 	private static void requireFillablePlaceholders(String strategyId, String pattern) {
-		Matcher matcher = PLACEHOLDER.matcher(pattern);
-		while (matcher.find()) {
-			if (!SUPPORTED_PLACEHOLDERS.contains(matcher.group())) {
-				throw new AgentCoreMemoryException.ConfigurationException(String.format(
-						"Namespace pattern '%s' for strategy '%s' uses the placeholder %s, which retrieval cannot "
-								+ "fill. Supported placeholders: %s.",
-						pattern, strategyId, matcher.group(), SUPPORTED_PLACEHOLDERS));
-			}
+		String unfilled = AgentCoreLongTermMemoryNamespace.unfilledPlaceholder(pattern);
+		if (unfilled != null) {
+			throw new AgentCoreMemoryException.ConfigurationException(String.format(
+					"Namespace pattern '%s' for strategy '%s' uses the placeholder %s, which retrieval cannot "
+							+ "fill. Supported placeholders: %s.",
+					pattern, strategyId, unfilled, AgentCoreLongTermMemoryNamespace.FILLED_PLACEHOLDERS));
 		}
 	}
 
