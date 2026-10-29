@@ -19,8 +19,6 @@ package org.springaicommunity.agentcore.memory.longterm;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,6 +29,8 @@ import software.amazon.awssdk.services.bedrockagentcorecontrol.model.EpisodicRef
 import software.amazon.awssdk.services.bedrockagentcorecontrol.model.GetMemoryRequest;
 import software.amazon.awssdk.services.bedrockagentcorecontrol.model.GetMemoryResponse;
 import software.amazon.awssdk.services.bedrockagentcorecontrol.model.MemoryStrategy;
+import software.amazon.awssdk.services.bedrockagentcorecontrol.model.MemoryStrategyType;
+import software.amazon.awssdk.services.bedrockagentcorecontrol.model.OverrideType;
 import software.amazon.awssdk.services.bedrockagentcorecontrol.model.ReflectionConfiguration;
 import software.amazon.awssdk.services.bedrockagentcorecontrol.model.StrategyConfiguration;
 
@@ -60,11 +60,6 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 	private static final Logger logger = LoggerFactory.getLogger(AgentCoreLongTermMemoryNamespaceValidator.class);
 
 	private static final String STRATEGY_ID_PLACEHOLDER = "{memoryStrategyId}";
-
-	private static final Pattern PLACEHOLDER = Pattern.compile("\\{[^}]*}");
-
-	private static final List<String> SUPPORTED_PLACEHOLDERS = List.of("{memoryStrategyId}", "{actorId}",
-			"{sessionId}");
 
 	private final BedrockAgentCoreControlClient controlClient;
 
@@ -295,13 +290,14 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 	// mismatch hint would name a property that has no effect, so name the right group.
 	private void requireConfiguredType(String memoryId, MemoryStrategy strategy) {
 		AgentCoreLongTermMemoryStrategyType configured = this.configuredTypes.get(strategy.strategyId());
-		AgentCoreLongTermMemoryStrategyType actual = AgentCoreLongTermMemoryStrategyType.fromAwsType(strategy.type());
-		// CUSTOM and unknown types can back any group
+		AgentCoreLongTermMemoryStrategyType actual = effectiveType(strategy);
+		// SELF_MANAGED and unknown types can back any group
 		if (configured != null && actual != null && configured != actual) {
 			throw new AgentCoreMemoryException.ConfigurationException(String.format(
 					"Strategy '%s' is a %s strategy in memory '%s', but it is configured as %s.strategy-id. "
 							+ "Configure it as %s.strategy-id instead.",
-					strategy.strategyId(), strategy.type(), memoryId, configPrefix(configured), configPrefix(actual)));
+					strategy.strategyId(), describeType(strategy), memoryId, configPrefix(configured),
+					configPrefix(actual)));
 		}
 	}
 
@@ -311,9 +307,10 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 		return (configured != null) ? configPrefix(configured) : configPrefix(strategy);
 	}
 
-	// The property prefix of the strategy's config, derived from its AWS type
+	// The property prefix of the strategy's config, derived from its AWS type, or from
+	// the override type of a CUSTOM strategy
 	private static String configPrefix(MemoryStrategy strategy) {
-		return configPrefix(AgentCoreLongTermMemoryStrategyType.fromAwsType(strategy.type()));
+		return configPrefix(effectiveType(strategy));
 	}
 
 	// The property prefix of a strategy group; CUSTOM and unknown types have none
@@ -330,6 +327,34 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 		};
 	}
 
+	// The group a strategy belongs to. A CUSTOM strategy overrides one built-in type;
+	// SELF_MANAGED and unknown overrides belong to none.
+	private static AgentCoreLongTermMemoryStrategyType effectiveType(MemoryStrategy strategy) {
+		AgentCoreLongTermMemoryStrategyType type = AgentCoreLongTermMemoryStrategyType.fromAwsType(strategy.type());
+		OverrideType override = overrideType(strategy);
+		if (type != null || override == null) {
+			return type;
+		}
+		return switch (override) {
+			case SEMANTIC_OVERRIDE -> AgentCoreLongTermMemoryStrategyType.SEMANTIC;
+			case SUMMARY_OVERRIDE -> AgentCoreLongTermMemoryStrategyType.SUMMARY;
+			case USER_PREFERENCE_OVERRIDE -> AgentCoreLongTermMemoryStrategyType.USER_PREFERENCE;
+			case EPISODIC_OVERRIDE -> AgentCoreLongTermMemoryStrategyType.EPISODIC;
+			case SELF_MANAGED, UNKNOWN_TO_SDK_VERSION -> null;
+		};
+	}
+
+	private static OverrideType overrideType(MemoryStrategy strategy) {
+		StrategyConfiguration configuration = strategy.configuration();
+		return (strategy.type() == MemoryStrategyType.CUSTOM && configuration != null) ? configuration.type() : null;
+	}
+
+	// "SUMMARIZATION", or "CUSTOM (SUMMARY_OVERRIDE)" for a custom override
+	private static String describeType(MemoryStrategy strategy) {
+		OverrideType override = overrideType(strategy);
+		return (override != null) ? strategy.type() + " (" + override + ")" : String.valueOf(strategy.type());
+	}
+
 	// A memory namespace can be copied into the Spring config only if it is scoped by
 	// actor and uses no placeholders that retrieval cannot fill.
 	private static String firstSupported(List<String> namespaces) {
@@ -340,21 +365,13 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 	}
 
 	private static boolean isSupported(String namespace) {
-		Matcher matcher = PLACEHOLDER.matcher(namespace);
-		boolean hasActor = false;
-		while (matcher.find()) {
-			String placeholder = matcher.group();
-			if (!SUPPORTED_PLACEHOLDERS.contains(placeholder)) {
-				return false;
-			}
-			hasActor |= "{actorId}".equals(placeholder);
-		}
-		return hasActor;
+		return AgentCoreLongTermMemoryNamespace.unfilledPlaceholder(namespace) == null
+				&& namespace.contains("{actorId}");
 	}
 
 	private static String unsupportedNamespaceHint(String what) {
 		return "The " + what + " of the memory cannot be used: it must contain {actorId} and may only use the "
-				+ "placeholders " + SUPPORTED_PLACEHOLDERS + ". Change the " + what
+				+ "placeholders " + AgentCoreLongTermMemoryNamespace.FILLED_PLACEHOLDERS + ". Change the " + what
 				+ " of the memory strategy with the AWS console, CLI or your infrastructure tooling.";
 	}
 
@@ -367,14 +384,12 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 	// Retrieval fills only the supported placeholders. Any other one, such as a custom
 	// namespace key, would reach AWS as literal braces and fail every retrieval.
 	private static void requireFillablePlaceholders(String strategyId, String pattern) {
-		Matcher matcher = PLACEHOLDER.matcher(pattern);
-		while (matcher.find()) {
-			if (!SUPPORTED_PLACEHOLDERS.contains(matcher.group())) {
-				throw new AgentCoreMemoryException.ConfigurationException(String.format(
-						"Namespace pattern '%s' for strategy '%s' uses the placeholder %s, which retrieval cannot "
-								+ "fill. Supported placeholders: %s.",
-						pattern, strategyId, matcher.group(), SUPPORTED_PLACEHOLDERS));
-			}
+		String unfilled = AgentCoreLongTermMemoryNamespace.unfilledPlaceholder(pattern);
+		if (unfilled != null) {
+			throw new AgentCoreMemoryException.ConfigurationException(String.format(
+					"Namespace pattern '%s' for strategy '%s' uses the placeholder %s, which retrieval cannot "
+							+ "fill. Supported placeholders: %s.",
+					pattern, strategyId, unfilled, AgentCoreLongTermMemoryNamespace.FILLED_PLACEHOLDERS));
 		}
 	}
 

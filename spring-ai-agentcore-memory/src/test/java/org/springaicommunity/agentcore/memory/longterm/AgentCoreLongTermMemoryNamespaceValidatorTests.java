@@ -36,6 +36,7 @@ import software.amazon.awssdk.services.bedrockagentcorecontrol.model.GetMemoryRe
 import software.amazon.awssdk.services.bedrockagentcorecontrol.model.Memory;
 import software.amazon.awssdk.services.bedrockagentcorecontrol.model.MemoryStrategy;
 import software.amazon.awssdk.services.bedrockagentcorecontrol.model.MemoryStrategyType;
+import software.amazon.awssdk.services.bedrockagentcorecontrol.model.OverrideType;
 import software.amazon.awssdk.services.bedrockagentcorecontrol.model.ReflectionConfiguration;
 import software.amazon.awssdk.services.bedrockagentcorecontrol.model.StrategyConfiguration;
 
@@ -194,6 +195,58 @@ class AgentCoreLongTermMemoryNamespaceValidatorTests {
 
 		assertThatThrownBy(() -> validator.validateNamespaces("test-memory",
 				Map.of("custom-1", List.of(AgentCoreLongTermMemoryNamespace.ACTOR.getPattern()))))
+			.isInstanceOf(AgentCoreMemoryException.ConfigurationException.class)
+			.hasMessageContaining("agentcore.memory.long-term.episodic.namespace-pattern=/custom/{actorId}");
+	}
+
+	@Test
+	@DisplayName("Should type-check a CUSTOM strategy by its override type")
+	void shouldFailWhenCustomOverrideIsConfiguredUnderAnotherGroup() {
+		this.mockGetMemoryResponse(List.of(customStrategy("custom-sum", OverrideType.SUMMARY_OVERRIDE,
+				AgentCoreLongTermMemoryNamespace.SESSION.getPattern())));
+		var validator = new AgentCoreLongTermMemoryNamespaceValidator(this.controlClient, this.registrar, false,
+				Map.of("custom-sum", AgentCoreLongTermMemoryStrategyType.SEMANTIC));
+
+		assertThatThrownBy(() -> validator.validateNamespaces("test-memory",
+				Map.of("custom-sum", List.of(AgentCoreLongTermMemoryNamespace.ACTOR.getPattern()))))
+			.isInstanceOf(AgentCoreMemoryException.ConfigurationException.class)
+			.hasMessageContaining("Strategy 'custom-sum' is a CUSTOM (SUMMARY_OVERRIDE) strategy")
+			.hasMessageContaining("configured as agentcore.memory.long-term.semantic.strategy-id")
+			.hasMessageContaining("Configure it as agentcore.memory.long-term.summary.strategy-id instead");
+	}
+
+	@Test
+	@DisplayName("Should accept a CUSTOM strategy under the group of its override type")
+	void shouldAcceptCustomOverrideUnderItsGroup() {
+		this.mockGetMemoryResponse(List.of(customStrategy("custom-sem", OverrideType.SEMANTIC_OVERRIDE,
+				AgentCoreLongTermMemoryNamespace.ACTOR.getPattern())));
+		var validator = new AgentCoreLongTermMemoryNamespaceValidator(this.controlClient, this.registrar, false,
+				Map.of("custom-sem", AgentCoreLongTermMemoryStrategyType.SEMANTIC));
+
+		validator.validateNamespaces("test-memory",
+				Map.of("custom-sem", List.of(AgentCoreLongTermMemoryNamespace.ACTOR.getPattern())));
+	}
+
+	@Test
+	@DisplayName("Should not type-check a SELF_MANAGED strategy")
+	void shouldNotTypeCheckSelfManagedStrategy() {
+		this.mockGetMemoryResponse(List.of(customStrategy("self-1", OverrideType.SELF_MANAGED,
+				AgentCoreLongTermMemoryNamespace.ACTOR.getPattern())));
+		var validator = new AgentCoreLongTermMemoryNamespaceValidator(this.controlClient, this.registrar, false,
+				Map.of("self-1", AgentCoreLongTermMemoryStrategyType.SEMANTIC));
+
+		validator.validateNamespaces("test-memory",
+				Map.of("self-1", List.of(AgentCoreLongTermMemoryNamespace.ACTOR.getPattern())));
+	}
+
+	@Test
+	@DisplayName("Should name the override type's group in the mismatch hint without a configured type")
+	void shouldNameOverrideGroupInHintWithoutConfiguredType() {
+		this.mockGetMemoryResponse(
+				List.of(customStrategy("custom-ep", OverrideType.EPISODIC_OVERRIDE, "/custom/{actorId}")));
+
+		assertThatThrownBy(() -> this.validator.validateNamespaces("test-memory",
+				Map.of("custom-ep", List.of(AgentCoreLongTermMemoryNamespace.ACTOR.getPattern()))))
 			.isInstanceOf(AgentCoreMemoryException.ConfigurationException.class)
 			.hasMessageContaining("agentcore.memory.long-term.episodic.namespace-pattern=/custom/{actorId}");
 	}
@@ -433,6 +486,15 @@ class AgentCoreLongTermMemoryNamespaceValidatorTests {
 			.isInstanceOf(AgentCoreMemoryException.ConfigurationException.class)
 			.hasMessageContaining("{orgname}")
 			.hasMessageContaining("cannot fill");
+	}
+
+	private static MemoryStrategy customStrategy(String strategyId, OverrideType override, String namespace) {
+		return MemoryStrategy.builder()
+			.strategyId(strategyId)
+			.type(MemoryStrategyType.CUSTOM)
+			.namespaces(List.of(namespace))
+			.configuration(StrategyConfiguration.builder().type(override).build())
+			.build();
 	}
 
 	private void mockGetMemoryResponse(List<MemoryStrategy> strategies) {
