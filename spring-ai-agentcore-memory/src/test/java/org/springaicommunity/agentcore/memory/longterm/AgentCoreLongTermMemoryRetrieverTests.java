@@ -17,6 +17,7 @@
 package org.springaicommunity.agentcore.memory.longterm;
 
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.assertj.core.api.Assertions;
@@ -28,6 +29,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springaicommunity.agentcore.memory.AgentCoreMemoryException;
 import org.springaicommunity.agentcore.memory.longterm.AgentCoreLongTermMemoryRetriever.MemoryRecord;
+import org.springaicommunity.agentcore.memory.longterm.AgentCoreLongTermMemoryRetriever.NamespaceKey;
 import software.amazon.awssdk.services.bedrockagentcore.BedrockAgentCoreClient;
 import software.amazon.awssdk.services.bedrockagentcore.model.ListMemoryRecordsRequest;
 import software.amazon.awssdk.services.bedrockagentcore.model.ListMemoryRecordsResponse;
@@ -95,7 +97,7 @@ class AgentCoreLongTermMemoryRetrieverTests {
 		then(this.client).should().retrieveMemoryRecords(captor.capture());
 
 		assertThat(captor.getValue().memoryId()).isEqualTo("test-memory-id");
-		assertThat(captor.getValue().namespace()).isEqualTo("/strategies/strategy-123/actors/user-456/");
+		assertThat(captor.getValue().namespace()).isEqualTo("/strategies/strategy-123/actors/user-456");
 		assertThat(captor.getValue().searchCriteria().searchQuery()).isEqualTo("coffee preferences");
 		assertThat(captor.getValue().searchCriteria().topK()).isEqualTo(5);
 	}
@@ -126,7 +128,7 @@ class AgentCoreLongTermMemoryRetrieverTests {
 		then(this.client).should().retrieveMemoryRecords(captor.capture());
 
 		assertThat(captor.getValue().namespace())
-			.isEqualTo("/strategies/strategy-123/actors/user-456/sessions/session-789/");
+			.isEqualTo("/strategies/strategy-123/actors/user-456/sessions/session-789");
 	}
 
 	@Test
@@ -159,11 +161,11 @@ class AgentCoreLongTermMemoryRetrieverTests {
 		then(this.client).should().listMemoryRecords(captor.capture());
 
 		assertThat(captor.getValue().memoryId()).isEqualTo("test-memory-id");
-		assertThat(captor.getValue().namespace()).isEqualTo("/strategies/strategy-123/actors/user-456/");
+		assertThat(captor.getValue().namespace()).isEqualTo("/strategies/strategy-123/actors/user-456");
 	}
 
 	@Test
-	void shouldNotDoubleTrailingSlashOfCustomPattern() {
+	void shouldSendCustomPatternAsWrittenWithoutValidationData() {
 		// Given
 		given(this.client.retrieveMemoryRecords(any(RetrieveMemoryRecordsRequest.class)))
 			.willReturn(RetrieveMemoryRecordsResponse.builder().build());
@@ -179,18 +181,50 @@ class AgentCoreLongTermMemoryRetrieverTests {
 	}
 
 	@Test
-	void shouldEndCustomPatternWithLiteralSegmentWithSlash() {
-		// Given
+	void shouldEndRequestWithSlashWhenTheMatchedMemoryNamespaceDoes() {
+		// Given: validation matched the ACTOR pattern to a memory namespace ending with
+		// '/'
+		String pattern = AgentCoreLongTermMemoryNamespace.ACTOR.getPattern();
+		var retriever = new AgentCoreLongTermMemoryRetriever(this.client, "test-memory-id",
+				Map.of(new NamespaceKey("strategy-123", pattern), true));
+		given(this.client.retrieveMemoryRecords(any(RetrieveMemoryRecordsRequest.class)))
+			.willReturn(RetrieveMemoryRecordsResponse.builder().build());
 		given(this.client.listMemoryRecords(any(ListMemoryRecordsRequest.class)))
 			.willReturn(ListMemoryRecordsResponse.builder().build());
 
 		// When
-		this.retriever.listMemories("strategy-123", "user-456", "/users/{actorId}/preferences");
+		retriever.searchMemories("strategy-123", "user-456", null, "query", 5, pattern);
+		retriever.listMemories("strategy-123", "user-456", pattern);
+
+		// Then: the prefix match stops at the actor segment
+		ArgumentCaptor<RetrieveMemoryRecordsRequest> search = ArgumentCaptor
+			.forClass(RetrieveMemoryRecordsRequest.class);
+		then(this.client).should().retrieveMemoryRecords(search.capture());
+		assertThat(search.getValue().namespace()).isEqualTo(ACTOR_NAMESPACE + "/");
+		ArgumentCaptor<ListMemoryRecordsRequest> list = ArgumentCaptor.forClass(ListMemoryRecordsRequest.class);
+		then(this.client).should().listMemoryRecords(list.capture());
+		assertThat(list.getValue().namespace()).isEqualTo(ACTOR_NAMESPACE + "/");
+	}
+
+	@Test
+	void shouldDropTrailingSlashWhenTheMatchedMemoryNamespaceHasNone() {
+		// Given: the pattern ends with '/', the memory namespace it matched does not.
+		// AgentCore Memory stores namespaces as written, so the slash would match
+		// nothing.
+		String pattern = "/users/{actorId}/";
+		var retriever = new AgentCoreLongTermMemoryRetriever(this.client, "test-memory-id",
+				Map.of(new NamespaceKey("strategy-123", pattern), false));
+		given(this.client.retrieveMemoryRecords(any(RetrieveMemoryRecordsRequest.class)))
+			.willReturn(RetrieveMemoryRecordsResponse.builder().build());
+
+		// When
+		retriever.searchMemories("strategy-123", "user-456", null, "query", 5, pattern);
 
 		// Then
-		ArgumentCaptor<ListMemoryRecordsRequest> captor = ArgumentCaptor.forClass(ListMemoryRecordsRequest.class);
-		then(this.client).should().listMemoryRecords(captor.capture());
-		assertThat(captor.getValue().namespace()).isEqualTo("/users/user-456/preferences/");
+		ArgumentCaptor<RetrieveMemoryRecordsRequest> captor = ArgumentCaptor
+			.forClass(RetrieveMemoryRecordsRequest.class);
+		then(this.client).should().retrieveMemoryRecords(captor.capture());
+		assertThat(captor.getValue().namespace()).isEqualTo("/users/user-456");
 	}
 
 	@Test
@@ -334,7 +368,7 @@ class AgentCoreLongTermMemoryRetrieverTests {
 			.containsExactly(null, "token-2");
 		assertThat(captor.getAllValues()).allSatisfy((request) -> {
 			assertThat(request.memoryId()).isEqualTo("test-memory-id");
-			assertThat(request.namespace()).isEqualTo(ACTOR_NAMESPACE + "/");
+			assertThat(request.namespace()).isEqualTo(ACTOR_NAMESPACE);
 			assertThat(request.memoryStrategyId()).isEqualTo("strategy-123");
 			assertThat(request.maxResults()).isEqualTo(100);
 		});
@@ -442,7 +476,7 @@ class AgentCoreLongTermMemoryRetrieverTests {
 		ArgumentCaptor<RetrieveMemoryRecordsRequest> captor = ArgumentCaptor
 			.forClass(RetrieveMemoryRecordsRequest.class);
 		then(this.client).should().retrieveMemoryRecords(captor.capture());
-		assertThat(captor.getValue().namespace()).isEqualTo("/strategies/strategy-123/actors/tenant/");
+		assertThat(captor.getValue().namespace()).isEqualTo("/strategies/strategy-123/actors/tenant");
 	}
 
 	@Test
@@ -463,7 +497,7 @@ class AgentCoreLongTermMemoryRetrieverTests {
 
 		ArgumentCaptor<ListMemoryRecordsRequest> captor = ArgumentCaptor.forClass(ListMemoryRecordsRequest.class);
 		then(this.client).should().listMemoryRecords(captor.capture());
-		assertThat(captor.getValue().namespace()).isEqualTo("/strategies/strategy-123/actors/tenant:alice/");
+		assertThat(captor.getValue().namespace()).isEqualTo("/strategies/strategy-123/actors/tenant:alice");
 	}
 
 	@Test

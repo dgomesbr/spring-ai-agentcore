@@ -340,7 +340,7 @@ class AgentCoreLongTermMemoryNamespaceValidatorTests {
 	@Test
 	@DisplayName("Should pass validation when the memory namespaces end with a slash")
 	void shouldPassValidationWhenMemoryNamespacesEndWithSlash() {
-		// Given - AgentCore Memory stores namespaces with a trailing slash
+		// Given - templates that end with a slash
 		MemoryStrategy semantic = MemoryStrategy.builder()
 			.strategyId("semantic-123")
 			.namespaces(List.of("/strategies/{memoryStrategyId}/actors/{actorId}/"))
@@ -356,6 +356,77 @@ class AgentCoreLongTermMemoryNamespaceValidatorTests {
 		this.validator.validateNamespaces("test-memory",
 				Map.of("semantic-123", List.of(AgentCoreLongTermMemoryNamespace.ACTOR.getPattern()), "summary-456",
 						List.of(AgentCoreLongTermMemoryNamespace.SESSION.getPattern())));
+	}
+
+	@Test
+	@DisplayName("Should report whether each matched memory namespace ends with a slash")
+	void shouldReportTrailingSlashOfMatchedMemoryNamespaces() {
+		// Given - AgentCore Memory stores namespaces as written in the template, so the
+		// retriever must send each request in its memory's form
+		String actor = AgentCoreLongTermMemoryNamespace.ACTOR.getPattern();
+		String session = AgentCoreLongTermMemoryNamespace.SESSION.getPattern();
+		EpisodicReflectionConfiguration reflections = EpisodicReflectionConfiguration.builder()
+			.namespaces(List.of("/episodes/{actorId}/"))
+			.build();
+		MemoryStrategy semantic = MemoryStrategy.builder()
+			.strategyId("semantic-123")
+			.namespaces(List.of(actor + "/"))
+			.build();
+		MemoryStrategy summary = MemoryStrategy.builder()
+			.strategyId("summary-456")
+			.namespaces(List.of(session))
+			.build();
+		MemoryStrategy episodic = MemoryStrategy.builder()
+			.strategyId("episodic-789")
+			.namespaces(List.of("/episodes/{actorId}/{sessionId}"))
+			.configuration(StrategyConfiguration.builder()
+				.reflection(ReflectionConfiguration.builder().episodicReflectionConfiguration(reflections).build())
+				.build())
+			.build();
+		this.mockGetMemoryResponse(List.of(semantic, summary, episodic));
+
+		// When
+		var trailingSlashes = this.validator
+			.validateNamespacesForRetrieval(
+					"test-memory", Map.of("semantic-123", List.of(actor), "summary-456", List.of(session),
+							"episodic-789", List.of("/episodes/{actorId}/{sessionId}")),
+					Map.of("episodic-789", "/episodes/{actorId}"));
+
+		// Then
+		assertThat(trailingSlashes).containsOnly(
+				Map.entry(new AgentCoreLongTermMemoryRetriever.NamespaceKey("semantic-123", actor), true),
+				Map.entry(new AgentCoreLongTermMemoryRetriever.NamespaceKey("summary-456", session), false),
+				Map.entry(new AgentCoreLongTermMemoryRetriever.NamespaceKey("episodic-789",
+						"/episodes/{actorId}/{sessionId}"), false),
+				Map.entry(new AgentCoreLongTermMemoryRetriever.NamespaceKey("episodic-789", "/episodes/{actorId}"),
+						true));
+	}
+
+	@Test
+	@DisplayName("Should report a trailing slash only when every matched memory namespace has one")
+	void shouldReportTrailingSlashOnlyWhenEveryMatchedNamespaceHasOne() {
+		// Given - episodes and reflections share one pattern, and only the reflection
+		// namespace ends with a slash: a request with it would miss every episode
+		String pattern = "/episodes/{actorId}";
+		EpisodicReflectionConfiguration reflections = EpisodicReflectionConfiguration.builder()
+			.namespaces(List.of(pattern + "/"))
+			.build();
+		MemoryStrategy episodic = MemoryStrategy.builder()
+			.strategyId("episodic-789")
+			.namespaces(List.of(pattern))
+			.configuration(StrategyConfiguration.builder()
+				.reflection(ReflectionConfiguration.builder().episodicReflectionConfiguration(reflections).build())
+				.build())
+			.build();
+		this.mockGetMemoryResponse(List.of(episodic));
+
+		// When
+		var trailingSlashes = this.validator.validateNamespacesForRetrieval("test-memory",
+				Map.of("episodic-789", List.of(pattern)), Map.of("episodic-789", pattern));
+
+		// Then
+		assertThat(trailingSlashes)
+			.containsOnly(Map.entry(new AgentCoreLongTermMemoryRetriever.NamespaceKey("episodic-789", pattern), false));
 	}
 
 	@Test

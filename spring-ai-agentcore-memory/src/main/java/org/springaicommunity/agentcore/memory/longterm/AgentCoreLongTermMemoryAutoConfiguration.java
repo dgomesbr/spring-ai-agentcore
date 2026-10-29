@@ -114,6 +114,9 @@ public class AgentCoreLongTermMemoryAutoConfiguration {
 			AgentCoreMemoryProperties memoryConfig, AgentCoreLongTermMemoryProperties longTermMemoryProperties,
 			Supplier<BedrockAgentCoreControlClient> controlClientFactory) {
 		String memoryId = memoryConfig.memoryId();
+		// Explicit mode only: auto-discovery already uses the memory's namespaces as
+		// written, including any trailing slash
+		Map<AgentCoreLongTermMemoryRetriever.NamespaceKey, Boolean> trailingSlashes = Map.of();
 
 		if (!longTermMemoryProperties.autoDiscovery()) {
 			Map<String, AgentCoreLongTermMemoryStrategyType> typesByStrategy = collectTypesByStrategy(
@@ -128,12 +131,13 @@ public class AgentCoreLongTermMemoryAutoConfiguration {
 					AgentCoreLongTermMemoryNamespaceValidator validator = new AgentCoreLongTermMemoryNamespaceValidator(
 							controlClient, registrar, longTermMemoryProperties.namespace().autoRegister(),
 							typesByStrategy);
-					validator.validateNamespaces(memoryId, namespacesByStrategy, reflectionNamespacesByStrategy);
+					trailingSlashes = validator.validateNamespacesForRetrieval(memoryId, namespacesByStrategy,
+							reflectionNamespacesByStrategy);
 				}
 			}
 		}
 
-		return new AgentCoreLongTermMemoryRetriever(client, memoryId);
+		return new AgentCoreLongTermMemoryRetriever(client, memoryId, trailingSlashes);
 	}
 
 	// ==================== Autodiscovery Mode ====================

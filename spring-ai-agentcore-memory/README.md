@@ -407,7 +407,7 @@ agentcore:
 | `ACTOR` | `/strategies/{memoryStrategyId}/actors/{actorId}` | Search across all sessions for the user |
 | `SESSION` | `/strategies/{memoryStrategyId}/actors/{actorId}/sessions/{sessionId}` | Search only current session |
 
-AgentCore Memory matches the namespace of a retrieval request as a string prefix. The library therefore sends the resolved namespace with a trailing `/` (for example `/strategies/abc123/actors/alice/`), the form in which AgentCore Memory stores namespaces, so a request for actor `alice` does not match the records of actor `alice2`. Use this form in IAM policies that restrict the `bedrock-agentcore:namespace` condition key.
+AgentCore Memory matches the namespace of a retrieval request as a string prefix, and stores namespaces as written in the strategy's template, with or without a trailing `/`. With explicit configuration, a request ends with `/` exactly when the memory namespace it was validated against does. For a memory whose template ends with `/` (for example `/strategies/{memoryStrategyId}/actors/{actorId}/`), a request for actor `alice` then stops at `/actors/alice/`, and the records of actor `alice2` do not take up `top-k`. Without a trailing slash, records of other actors are dropped after retrieval. Auto-discovery uses the memory's namespaces as written. In IAM policies that restrict the `bedrock-agentcore:namespace` condition key, use the form of the memory's namespace.
 
 #### Custom Namespace Patterns
 

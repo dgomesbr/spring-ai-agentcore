@@ -24,6 +24,7 @@ import java.util.function.Supplier;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.DisabledIfEnvironmentVariable;
+import org.mockito.ArgumentCaptor;
 import org.springaicommunity.agentcore.memory.AgentCoreMemoryException;
 import org.springaicommunity.agentcore.memory.session.AgentCoreSessionMemory;
 import org.springaicommunity.agentcore.memory.session.AgentCoreSessionMissingDepDiagnostics;
@@ -31,6 +32,8 @@ import org.springaicommunity.agentcore.memory.session.AgentCoreSessionRepository
 import org.springaicommunity.agentcore.memory.session.AgentCoreSessionRepositoryAutoConfiguration;
 import org.springaicommunity.agentcore.memory.shortterm.AgentCoreShortTermMemoryRepositoryAutoConfiguration;
 import software.amazon.awssdk.services.bedrockagentcore.BedrockAgentCoreClient;
+import software.amazon.awssdk.services.bedrockagentcore.model.RetrieveMemoryRecordsRequest;
+import software.amazon.awssdk.services.bedrockagentcore.model.RetrieveMemoryRecordsResponse;
 import software.amazon.awssdk.services.bedrockagentcorecontrol.BedrockAgentCoreControlClient;
 import software.amazon.awssdk.services.bedrockagentcorecontrol.model.GetMemoryRequest;
 import software.amazon.awssdk.services.bedrockagentcorecontrol.model.GetMemoryResponse;
@@ -52,6 +55,7 @@ import org.springframework.core.Ordered;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.then;
 import static org.mockito.Mockito.mock;
 
 /**
@@ -205,6 +209,28 @@ class AgentCoreLongTermMemoryAutoConfigurationTests {
 				var config = context.getBean(AgentCoreLongTermMemoryProperties.class);
 				assertThat(config.semantic().namespace()).isEqualTo(AgentCoreLongTermMemoryNamespace.SESSION);
 				assertThat(config.semantic().resolveNamespacePattern()).isEqualTo(SESSION_NAMESPACE);
+			});
+	}
+
+	@Test
+	@DisplayName("Should send retrieval requests in the matched memory namespace's form")
+	void shouldSendRequestsInTheMemoryNamespaceForm() {
+		// The memory's template ends with '/'; the configured ACTOR pattern does not
+		this.contextRunner.withUserConfiguration(TrailingSlashSemanticConfiguration.class)
+			.withPropertyValues(MEMORY_ID_PROP, SEMANTIC_STRATEGY_PROP)
+			.run((context) -> {
+				BedrockAgentCoreClient client = context.getBean(BedrockAgentCoreClient.class);
+				given(client.retrieveMemoryRecords(any(RetrieveMemoryRecordsRequest.class)))
+					.willReturn(RetrieveMemoryRecordsResponse.builder().build());
+
+				context.getBean(AgentCoreLongTermMemoryRetriever.class)
+					.searchMemories("semantic-123", "alice", null, "q", 3,
+							AgentCoreLongTermMemoryNamespace.ACTOR.getPattern());
+
+				ArgumentCaptor<RetrieveMemoryRecordsRequest> captor = ArgumentCaptor
+					.forClass(RetrieveMemoryRecordsRequest.class);
+				then(client).should().retrieveMemoryRecords(captor.capture());
+				assertThat(captor.getValue().namespace()).isEqualTo("/strategies/semantic-123/actors/alice/");
 			});
 	}
 
@@ -800,6 +826,33 @@ class AgentCoreLongTermMemoryAutoConfigurationTests {
 						.strategyId("summary-456")
 						.type(MemoryStrategyType.SUMMARIZATION)
 						.namespaces(List.of(SESSION_NAMESPACE))
+						.build()))
+					.build())
+				.build();
+
+			given(controlClient.getMemory(any(GetMemoryRequest.class))).willReturn(response);
+			return () -> controlClient;
+		}
+
+	}
+
+	@Configuration
+	static class TrailingSlashSemanticConfiguration {
+
+		@Bean
+		BedrockAgentCoreClient bedrockAgentCoreClient() {
+			return mock(BedrockAgentCoreClient.class);
+		}
+
+		@Bean
+		Supplier<BedrockAgentCoreControlClient> controlClientFactory() {
+			BedrockAgentCoreControlClient controlClient = mock(BedrockAgentCoreControlClient.class);
+
+			GetMemoryResponse response = GetMemoryResponse.builder()
+				.memory(Memory.builder()
+					.strategies(List.of(MemoryStrategy.builder()
+						.strategyId("semantic-123")
+						.namespaces(List.of(AgentCoreLongTermMemoryNamespace.ACTOR.getPattern() + "/"))
 						.build()))
 					.build())
 				.build();

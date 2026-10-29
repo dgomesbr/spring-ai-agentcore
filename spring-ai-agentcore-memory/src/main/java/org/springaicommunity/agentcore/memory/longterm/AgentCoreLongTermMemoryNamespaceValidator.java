@@ -17,6 +17,7 @@
 package org.springaicommunity.agentcore.memory.longterm;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -125,8 +126,29 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 	 */
 	public void validateNamespaces(String memoryId, Map<String, List<String>> namespacesByStrategy,
 			Map<String, String> reflectionNamespacesByStrategy) {
+		this.validateNamespacesForRetrieval(memoryId, namespacesByStrategy, reflectionNamespacesByStrategy);
+	}
+
+	/**
+	 * Validates like {@link #validateNamespaces(String, Map, Map)} and reports, for each
+	 * pattern that matched a memory namespace, whether that namespace ends with
+	 * {@code /}. AgentCore Memory stores namespaces as written in the template, and
+	 * {@link #matchesPattern} ignores a trailing slash, so the retriever needs this to
+	 * send requests in the memory's own form.
+	 * @param memoryId the memory resource ID
+	 * @param namespacesByStrategy map of strategy ID to its list of expected namespace
+	 * patterns
+	 * @param reflectionNamespacesByStrategy map of episodic strategy ID to its expected
+	 * reflection namespace pattern
+	 * @return for each matched strategy ID and pattern, whether every memory namespace it
+	 * matched ends with {@code /}
+	 * @throws AgentCoreMemoryException.ConfigurationException if any namespace doesn't
+	 * match expected format
+	 */
+	Map<AgentCoreLongTermMemoryRetriever.NamespaceKey, Boolean> validateNamespacesForRetrieval(String memoryId,
+			Map<String, List<String>> namespacesByStrategy, Map<String, String> reflectionNamespacesByStrategy) {
 		if (namespacesByStrategy.isEmpty() && reflectionNamespacesByStrategy.isEmpty()) {
-			return;
+			return Map.of();
 		}
 
 		logger.info("Validating namespace configuration for memory: {}", memoryId);
@@ -141,13 +163,14 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 		}
 
 		List<Registration> registrations = new ArrayList<>();
+		Map<AgentCoreLongTermMemoryRetriever.NamespaceKey, Boolean> trailingSlashes = new HashMap<>();
 		for (Map.Entry<String, List<String>> entry : namespacesByStrategy.entrySet()) {
 			String strategyId = entry.getKey();
 			List<String> expectedPatterns = entry.getValue();
-			this.validateStrategy(memoryId, strategies, strategyId, expectedPatterns, registrations);
+			this.validateStrategy(memoryId, strategies, strategyId, expectedPatterns, registrations, trailingSlashes);
 		}
 		for (Map.Entry<String, String> entry : reflectionNamespacesByStrategy.entrySet()) {
-			this.validateReflections(memoryId, strategies, entry.getKey(), entry.getValue());
+			this.validateReflections(memoryId, strategies, entry.getKey(), entry.getValue(), trailingSlashes);
 		}
 		// Registration writes to AWS, so it waits until every check above has passed.
 		for (Registration registration : registrations) {
@@ -155,10 +178,12 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 		}
 
 		logger.info("Namespace validation passed for {} strategies", namespacesByStrategy.size());
+		return trailingSlashes;
 	}
 
 	private void validateStrategy(String memoryId, List<MemoryStrategy> strategies, String strategyId,
-			List<String> expectedPatterns, List<Registration> registrations) {
+			List<String> expectedPatterns, List<Registration> registrations,
+			Map<AgentCoreLongTermMemoryRetriever.NamespaceKey, Boolean> trailingSlashes) {
 		MemoryStrategy strategy = findStrategy(memoryId, strategies, strategyId);
 		this.requireConfiguredType(memoryId, strategy);
 
@@ -171,9 +196,13 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 		// Every expected pattern must match at least one actual namespace.
 		for (String expected : expectedPatterns) {
 			requireFillablePlaceholders(strategyId, expected);
-			boolean matched = actualNamespaces.stream()
-				.anyMatch((actual) -> this.matchesPattern(actual, expected, strategyId));
-			if (!matched) {
+			List<String> matches = actualNamespaces.stream()
+				.filter((actual) -> this.matchesPattern(actual, expected, strategyId))
+				.toList();
+			if (!matches.isEmpty()) {
+				recordTrailingSlash(trailingSlashes, strategyId, expected, matches);
+			}
+			else {
 				// Registering a pattern without {actorId} would make all actors share
 				// one namespace, so such a mismatch fails even with auto-registration.
 				if (this.autoRegister && isSupported(expected)) {
@@ -191,13 +220,17 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 	}
 
 	private void validateReflections(String memoryId, List<MemoryStrategy> strategies, String strategyId,
-			String expectedPattern) {
+			String expectedPattern, Map<AgentCoreLongTermMemoryRetriever.NamespaceKey, Boolean> trailingSlashes) {
 		requireFillablePlaceholders(strategyId, expectedPattern);
 		MemoryStrategy strategy = findStrategy(memoryId, strategies, strategyId);
 		List<String> actualNamespaces = reflectionNamespaces(strategy);
-		boolean matched = actualNamespaces.stream()
-			.anyMatch((actual) -> this.matchesPattern(actual, expectedPattern, strategyId));
-		if (!matched) {
+		List<String> matches = actualNamespaces.stream()
+			.filter((actual) -> this.matchesPattern(actual, expectedPattern, strategyId))
+			.toList();
+		if (!matches.isEmpty()) {
+			recordTrailingSlash(trailingSlashes, strategyId, expectedPattern, matches);
+		}
+		else {
 			String header = String.format("Reflection namespace mismatch for episodic strategy '%s'.%n"
 					+ "  In AWS Memory:    %s%n" + "  In Spring Config: %s%n%n", strategyId, actualNamespaces,
 					expectedPattern);
@@ -215,6 +248,16 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 		}
 		logger.debug("Strategy '{}' reflection namespace validated: expected={}, actual={}", strategyId,
 				expectedPattern, actualNamespaces);
+	}
+
+	// A request ends with '/' only if every memory namespace its pattern matched does,
+	// whichever check matched it: a request without the slash still prefix-matches a
+	// namespace with one, while a request with it matches nothing in a namespace without.
+	private static void recordTrailingSlash(Map<AgentCoreLongTermMemoryRetriever.NamespaceKey, Boolean> trailingSlashes,
+			String strategyId, String pattern, List<String> matches) {
+		boolean trailingSlash = matches.stream().allMatch((match) -> match.endsWith("/"));
+		trailingSlashes.merge(new AgentCoreLongTermMemoryRetriever.NamespaceKey(strategyId, pattern), trailingSlash,
+				Boolean::logicalAnd);
 	}
 
 	private static MemoryStrategy findStrategy(String memoryId, List<MemoryStrategy> strategies, String strategyId) {
