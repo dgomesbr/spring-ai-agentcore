@@ -162,8 +162,8 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 		MemoryStrategy strategy = findStrategy(memoryId, strategies, strategyId);
 		this.requireConfiguredType(memoryId, strategy);
 
-		List<String> actualNamespaces = strategy.namespaces();
-		if (actualNamespaces == null || actualNamespaces.isEmpty()) {
+		List<String> actualNamespaces = AgentCoreLongTermMemoryStrategyDiscovery.strategyNamespaces(strategy);
+		if (actualNamespaces.isEmpty()) {
 			throw new AgentCoreMemoryException.ConfigurationException(
 					"Strategy '" + strategyId + "' has no namespaces configured.");
 		}

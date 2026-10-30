@@ -106,6 +106,25 @@ class AgentCoreLongTermMemoryStrategyDiscoveryTests {
 	}
 
 	@Test
+	void shouldFallBackToStrategyNamespaceTemplates() {
+		// AWS marks the strategy's namespaces field as legacy too
+		MemoryStrategy strategy = MemoryStrategy.builder()
+			.strategyId("sem-2")
+			.type(MemoryStrategyType.SEMANTIC)
+			.namespaceTemplates(List.of("/strategy/{memoryStrategyId}/actor/{actorId}/"))
+			.build();
+
+		this.mockGetMemory(List.of(strategy));
+
+		List<DiscoveredStrategy> discovered = new AgentCoreLongTermMemoryStrategyDiscovery(this.controlClient)
+			.discoverStrategies("mem-1");
+
+		assertThat(discovered).singleElement()
+			.satisfies((ds) -> assertThat(ds.namespaces())
+				.containsExactly("/strategy/{memoryStrategyId}/actor/{actorId}/"));
+	}
+
+	@Test
 	void shouldReturnEmptyReflectionsForEpisodicWithoutReflectionConfig() {
 		MemoryStrategy strategy = MemoryStrategy.builder()
 			.strategyId("ep-2")

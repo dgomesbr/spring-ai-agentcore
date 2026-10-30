@@ -299,6 +299,26 @@ class AgentCoreLongTermMemoryNamespaceValidatorTests {
 	}
 
 	@Test
+	@DisplayName("Should validate against namespace templates when the legacy namespaces field is empty")
+	void shouldValidateAgainstNamespaceTemplatesWhenNamespacesAreEmpty() {
+		// Given - AWS marks the strategy's namespaces field as legacy
+		String actor = AgentCoreLongTermMemoryNamespace.ACTOR.getPattern();
+		MemoryStrategy strategy = MemoryStrategy.builder()
+			.strategyId("semantic-123")
+			.namespaceTemplates(List.of(actor))
+			.build();
+
+		this.mockGetMemoryResponse(List.of(strategy));
+
+		// When/Then - passes for the template, and a mismatch names it
+		this.validator.validateNamespaces("test-memory", Map.of("semantic-123", List.of(actor)));
+		assertThatThrownBy(() -> this.validator.validateNamespaces("test-memory",
+				Map.of("semantic-123", List.of(AgentCoreLongTermMemoryNamespace.SESSION.getPattern()))))
+			.isInstanceOf(AgentCoreMemoryException.ConfigurationException.class)
+			.hasMessageContaining("In AWS Memory:    [" + actor + "]");
+	}
+
+	@Test
 	@DisplayName("Should skip validation when no strategies configured")
 	void shouldSkipValidationWhenNoStrategiesConfigured() {
 		// When/Then - no exception, no API call
