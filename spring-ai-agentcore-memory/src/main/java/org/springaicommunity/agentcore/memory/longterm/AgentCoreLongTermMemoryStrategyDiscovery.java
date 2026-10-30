@@ -70,35 +70,46 @@ public class AgentCoreLongTermMemoryStrategyDiscovery {
 		}
 
 		List<DiscoveredStrategy> discovered = new ArrayList<>();
+		List<String> typeLabels = new ArrayList<>();
 		int skipped = 0;
 		for (MemoryStrategy strategy : strategies) {
 			var mapped = this.mapStrategy(strategy);
 			if (mapped != null) {
+				// A CUSTOM strategy shows its override type, which is why it got this
+				// advisor
+				String typeLabel = (strategy.type() == MemoryStrategyType.CUSTOM) ? describeType(strategy)
+						: mapped.type().name();
 				discovered.add(mapped);
+				typeLabels.add(typeLabel);
 				logger.info("Discovered strategy: {} (type={}, namespaces={}, reflectionsNamespaces={})",
-						mapped.strategyId(), mapped.type(), mapped.namespaces(), mapped.reflectionsNamespaces());
+						mapped.strategyId(), typeLabel, mapped.namespaces(), mapped.reflectionsNamespaces());
 			}
 			else {
 				skipped++;
 			}
 		}
 
-		this.logDiscoveryOverview(memoryId, strategies.size(), discovered, skipped);
+		this.logDiscoveryOverview(memoryId, strategies.size(), discovered, typeLabels, skipped);
 		return discovered;
 	}
 
-	private void logDiscoveryOverview(String memoryId, int total, List<DiscoveredStrategy> discovered, int skipped) {
+	private void logDiscoveryOverview(String memoryId, int total, List<DiscoveredStrategy> discovered,
+			List<String> typeLabels, int skipped) {
 		if (discovered.isEmpty()) {
 			logger.warn("Strategy discovery for memory {}: {} total, 0 usable, {} skipped", memoryId, total, skipped);
 			return;
 		}
+		// Wide enough for labels such as CUSTOM (USER_PREFERENCE_OVERRIDE)
+		int typeWidth = Math.max(20, typeLabels.stream().mapToInt(String::length).max().orElse(0));
+		String row = "  %-" + typeWidth + "s %-45s %s%n";
 		StringBuilder table = new StringBuilder();
 		table.append(String.format("%n  Strategy discovery for memory '%s':%n", memoryId));
-		table.append(String.format("  %-20s %-45s %s%n", "TYPE", "STRATEGY ID", "REFLECTIONS"));
-		table.append("  ").append("-".repeat(80)).append(System.lineSeparator());
-		for (DiscoveredStrategy ds : discovered) {
+		table.append(String.format(row, "TYPE", "STRATEGY ID", "REFLECTIONS"));
+		table.append("  ").append("-".repeat(typeWidth + 60)).append(System.lineSeparator());
+		for (int i = 0; i < discovered.size(); i++) {
+			DiscoveredStrategy ds = discovered.get(i);
 			String refl = (ds.reflectionsNamespaces().isEmpty()) ? "no" : "yes";
-			table.append(String.format("  %-20s %-45s %s%n", ds.type(), ds.strategyId(), refl));
+			table.append(String.format(row, typeLabels.get(i), ds.strategyId(), refl));
 		}
 		table.append(String.format("  %d usable / %d total%s", discovered.size(), total,
 				(skipped > 0) ? " (" + skipped + " skipped)" : ""));

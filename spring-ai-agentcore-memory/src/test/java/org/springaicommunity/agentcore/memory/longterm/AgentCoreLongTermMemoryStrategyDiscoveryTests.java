@@ -135,13 +135,13 @@ class AgentCoreLongTermMemoryStrategyDiscoveryTests {
 		MemoryStrategy strategy = MemoryStrategy.builder()
 			.strategyId("ep-3")
 			.type(MemoryStrategyType.CUSTOM)
-			.namespaces(List.of("/strategy/{memoryStrategyId}/actor/{actorId}/"))
+			.namespaces(List.of("/strategy/{memoryStrategyId}/actor/{actorId}/session/{sessionId}/"))
 			.configuration(StrategyConfiguration.builder()
 				.type(OverrideType.EPISODIC_OVERRIDE)
 				.reflection(ReflectionConfiguration.builder()
 					.customReflectionConfiguration(CustomReflectionConfiguration.builder()
 						.episodicReflectionOverride(EpisodicReflectionOverride.builder()
-							.namespaceTemplates("/strategy/{memoryStrategyId}/")
+							.namespaceTemplates("/strategy/{memoryStrategyId}/actor/{actorId}/")
 							.build())
 						.build())
 					.build())
@@ -155,7 +155,7 @@ class AgentCoreLongTermMemoryStrategyDiscoveryTests {
 			.get(0);
 
 		assertThat(ds.type()).isEqualTo(AgentCoreLongTermMemoryStrategyType.EPISODIC);
-		assertThat(ds.reflectionsNamespaces()).containsExactly("/strategy/{memoryStrategyId}/");
+		assertThat(ds.reflectionsNamespaces()).containsExactly("/strategy/{memoryStrategyId}/actor/{actorId}/");
 	}
 
 	@Test
@@ -202,6 +202,29 @@ class AgentCoreLongTermMemoryStrategyDiscoveryTests {
 			assertThat(ds.type()).isEqualTo(expected);
 			assertThat(ds.namespaces()).containsExactly("/strategy/{memoryStrategyId}/actor/{actorId}/");
 		});
+	}
+
+	@Test
+	void shouldShowTheOverrideTypeOfCustomStrategiesInTheDiscoveryLog(CapturedOutput output) {
+		MemoryStrategy custom = MemoryStrategy.builder()
+			.strategyId("custom-sum")
+			.type(MemoryStrategyType.CUSTOM)
+			.namespaces(List.of("/strategy/{memoryStrategyId}/actor/{actorId}/session/{sessionId}/"))
+			.configuration(StrategyConfiguration.builder().type(OverrideType.SUMMARY_OVERRIDE).build())
+			.build();
+		MemoryStrategy builtIn = MemoryStrategy.builder()
+			.strategyId("sem-1")
+			.type(MemoryStrategyType.SEMANTIC)
+			.namespaces(List.of("/strategy/{memoryStrategyId}/actor/{actorId}/"))
+			.build();
+
+		this.mockGetMemory(List.of(custom, builtIn));
+
+		new AgentCoreLongTermMemoryStrategyDiscovery(this.controlClient).discoverStrategies("mem-1");
+
+		assertThat(output).contains("Discovered strategy: custom-sum (type=CUSTOM (SUMMARY_OVERRIDE),")
+			.containsPattern("CUSTOM [(]SUMMARY_OVERRIDE[)] +custom-sum +no")
+			.containsPattern("SEMANTIC +sem-1 +no");
 	}
 
 	@Test
