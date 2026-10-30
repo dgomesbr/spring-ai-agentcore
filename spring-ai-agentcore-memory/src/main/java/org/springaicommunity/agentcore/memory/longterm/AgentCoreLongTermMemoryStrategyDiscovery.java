@@ -161,23 +161,25 @@ public class AgentCoreLongTermMemoryStrategyDiscovery {
 		if (episodic == null) {
 			return List.of();
 		}
-		return namespacesOrTemplates(episodic.namespaces(), episodic.namespaceTemplates());
+		return templatesOrNamespaces(episodic.namespaceTemplates(), episodic.namespaces());
 	}
 
 	/**
-	 * The namespaces of a strategy, from its legacy {@code namespaces} field or else its
-	 * {@code namespaceTemplates}. The namespace validator calls it as well.
+	 * The namespaces of a strategy, from its {@code namespaceTemplates} or else its
+	 * legacy {@code namespaces} field. The namespace validator calls it as well.
 	 * @param strategy the AWS memory strategy descriptor
 	 * @return the strategy's namespaces, or empty when it reports none
 	 */
 	static List<String> strategyNamespaces(MemoryStrategy strategy) {
-		return namespacesOrTemplates(strategy.namespaces(), strategy.namespaceTemplates());
+		return templatesOrNamespaces(strategy.namespaceTemplates(), strategy.namespaces());
 	}
 
 	// AWS marks the namespaces fields of strategies and reflections as legacy in favor
-	// of namespaceTemplates, so fall back to the templates when a field is empty.
-	static List<String> namespacesOrTemplates(List<String> namespaces, List<String> namespaceTemplates) {
-		List<String> chosen = (namespaces != null && !namespaces.isEmpty()) ? namespaces : namespaceTemplates;
+	// of namespaceTemplates. The templates win, since the legacy field could go stale
+	// if AWS stops updating it; it is read only when the templates are empty.
+	static List<String> templatesOrNamespaces(List<String> namespaceTemplates, List<String> namespaces) {
+		List<String> chosen = (namespaceTemplates != null && !namespaceTemplates.isEmpty()) ? namespaceTemplates
+				: namespaces;
 		return (chosen != null) ? List.copyOf(chosen) : List.of();
 	}
 
