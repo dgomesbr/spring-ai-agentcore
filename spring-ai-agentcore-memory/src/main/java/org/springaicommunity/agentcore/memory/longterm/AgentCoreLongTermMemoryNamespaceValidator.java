@@ -126,29 +126,30 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 	 */
 	public void validateNamespaces(String memoryId, Map<String, List<String>> namespacesByStrategy,
 			Map<String, String> reflectionNamespacesByStrategy) {
-		this.validateNamespacesForRetrieval(memoryId, namespacesByStrategy, reflectionNamespacesByStrategy);
+		this.validate(memoryId, namespacesByStrategy, reflectionNamespacesByStrategy);
 	}
 
 	/**
-	 * Validates like {@link #validateNamespaces(String, Map, Map)} and reports, for each
-	 * pattern that matched a memory namespace, whether that namespace ends with
-	 * {@code /}. AgentCore Memory stores namespaces as written in the template, and
-	 * {@link #matchesPattern} ignores a trailing slash, so the retriever needs this to
-	 * send requests in the memory's own form.
+	 * Validates like {@link #validateNamespaces(String, Map, Map)} and returns each
+	 * pattern in the form of the memory namespace it matched. AgentCore Memory stores
+	 * namespaces as written in the template, and {@link #matchesPattern} ignores a
+	 * trailing slash. A request that ends with {@code /} matches nothing in a memory
+	 * whose namespaces don't, and one without it also matches the records of other actors
+	 * that share its prefix, so requests must follow the memory's form. A registered
+	 * pattern is returned as configured, the form the memory then stores.
 	 * @param memoryId the memory resource ID
 	 * @param namespacesByStrategy map of strategy ID to its list of expected namespace
 	 * patterns
 	 * @param reflectionNamespacesByStrategy map of episodic strategy ID to its expected
 	 * reflection namespace pattern
-	 * @return for each matched strategy ID and pattern, whether every memory namespace it
-	 * matched ends with {@code /}
+	 * @return the validated patterns, keyed like the arguments
 	 * @throws AgentCoreMemoryException.ConfigurationException if any namespace doesn't
 	 * match expected format
 	 */
-	Map<AgentCoreLongTermMemoryRetriever.NamespaceKey, Boolean> validateNamespacesForRetrieval(String memoryId,
-			Map<String, List<String>> namespacesByStrategy, Map<String, String> reflectionNamespacesByStrategy) {
+	ValidatedPatterns validate(String memoryId, Map<String, List<String>> namespacesByStrategy,
+			Map<String, String> reflectionNamespacesByStrategy) {
 		if (namespacesByStrategy.isEmpty() && reflectionNamespacesByStrategy.isEmpty()) {
-			return Map.of();
+			return ValidatedPatterns.NONE;
 		}
 
 		logger.info("Validating namespace configuration for memory: {}", memoryId);
@@ -163,14 +164,17 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 		}
 
 		List<Registration> registrations = new ArrayList<>();
-		Map<AgentCoreLongTermMemoryRetriever.NamespaceKey, Boolean> trailingSlashes = new HashMap<>();
+		Map<String, List<String>> validated = new HashMap<>();
 		for (Map.Entry<String, List<String>> entry : namespacesByStrategy.entrySet()) {
 			String strategyId = entry.getKey();
 			List<String> expectedPatterns = entry.getValue();
-			this.validateStrategy(memoryId, strategies, strategyId, expectedPatterns, registrations, trailingSlashes);
+			validated.put(strategyId,
+					this.validateStrategy(memoryId, strategies, strategyId, expectedPatterns, registrations));
 		}
+		Map<String, String> validatedReflections = new HashMap<>();
 		for (Map.Entry<String, String> entry : reflectionNamespacesByStrategy.entrySet()) {
-			this.validateReflections(memoryId, strategies, entry.getKey(), entry.getValue(), trailingSlashes);
+			validatedReflections.put(entry.getKey(),
+					this.validateReflections(memoryId, strategies, entry.getKey(), entry.getValue()));
 		}
 		// Registration writes to AWS, so it waits until every check above has passed.
 		for (Registration registration : registrations) {
@@ -178,12 +182,11 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 		}
 
 		logger.info("Namespace validation passed for {} strategies", namespacesByStrategy.size());
-		return trailingSlashes;
+		return new ValidatedPatterns(validated, validatedReflections);
 	}
 
-	private void validateStrategy(String memoryId, List<MemoryStrategy> strategies, String strategyId,
-			List<String> expectedPatterns, List<Registration> registrations,
-			Map<AgentCoreLongTermMemoryRetriever.NamespaceKey, Boolean> trailingSlashes) {
+	private List<String> validateStrategy(String memoryId, List<MemoryStrategy> strategies, String strategyId,
+			List<String> expectedPatterns, List<Registration> registrations) {
 		MemoryStrategy strategy = findStrategy(memoryId, strategies, strategyId);
 		this.requireConfiguredType(memoryId, strategy);
 
@@ -194,19 +197,21 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 		}
 
 		// Every expected pattern must match at least one actual namespace.
+		List<String> validated = new ArrayList<>();
 		for (String expected : expectedPatterns) {
 			requireFillablePlaceholders(strategyId, expected);
 			List<String> matches = actualNamespaces.stream()
 				.filter((actual) -> this.matchesPattern(actual, expected, strategyId))
 				.toList();
 			if (!matches.isEmpty()) {
-				recordTrailingSlash(trailingSlashes, strategyId, expected, matches);
+				validated.add(inMemoryForm(expected, matches));
 			}
 			else {
 				// Registering a pattern without {actorId} would make all actors share
 				// one namespace, so such a mismatch fails even with auto-registration.
 				if (this.autoRegister && isSupported(expected)) {
 					registrations.add(new Registration(strategyId, expected));
+					validated.add(expected);
 				}
 				else {
 					String message = this.buildErrorMessage(strategy, actualNamespaces, expected);
@@ -217,20 +222,18 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 
 		logger.debug("Strategy '{}' namespace validated: expected={}, actual={}", strategyId, expectedPatterns,
 				actualNamespaces);
+		return List.copyOf(validated);
 	}
 
-	private void validateReflections(String memoryId, List<MemoryStrategy> strategies, String strategyId,
-			String expectedPattern, Map<AgentCoreLongTermMemoryRetriever.NamespaceKey, Boolean> trailingSlashes) {
+	private String validateReflections(String memoryId, List<MemoryStrategy> strategies, String strategyId,
+			String expectedPattern) {
 		requireFillablePlaceholders(strategyId, expectedPattern);
 		MemoryStrategy strategy = findStrategy(memoryId, strategies, strategyId);
 		List<String> actualNamespaces = reflectionNamespaces(strategy);
 		List<String> matches = actualNamespaces.stream()
 			.filter((actual) -> this.matchesPattern(actual, expectedPattern, strategyId))
 			.toList();
-		if (!matches.isEmpty()) {
-			recordTrailingSlash(trailingSlashes, strategyId, expectedPattern, matches);
-		}
-		else {
+		if (matches.isEmpty()) {
 			String header = String.format("Reflection namespace mismatch for episodic strategy '%s'.%n"
 					+ "  In AWS Memory:    %s%n" + "  In Spring Config: %s%n%n", strategyId, actualNamespaces,
 					expectedPattern);
@@ -248,16 +251,19 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 		}
 		logger.debug("Strategy '{}' reflection namespace validated: expected={}, actual={}", strategyId,
 				expectedPattern, actualNamespaces);
+		return inMemoryForm(expectedPattern, matches);
 	}
 
-	// A request ends with '/' only if every memory namespace its pattern matched does,
-	// whichever check matched it: a request without the slash still prefix-matches a
-	// namespace with one, while a request with it matches nothing in a namespace without.
-	private static void recordTrailingSlash(Map<AgentCoreLongTermMemoryRetriever.NamespaceKey, Boolean> trailingSlashes,
-			String strategyId, String pattern, List<String> matches) {
-		boolean trailingSlash = matches.stream().allMatch((match) -> match.endsWith("/"));
-		trailingSlashes.merge(new AgentCoreLongTermMemoryRetriever.NamespaceKey(strategyId, pattern), trailingSlash,
-				Boolean::logicalAnd);
+	// The pattern takes the trailing slash of the memory namespaces it matched. It keeps
+	// one only if every match has one: a request without the slash still matches a
+	// namespace with one as a prefix, but not the other way round.
+	private static String inMemoryForm(String pattern, List<String> matches) {
+		String base = stripTrailingSlashes(pattern);
+		return (matches.stream().allMatch((match) -> match.endsWith("/"))) ? base + "/" : base;
+	}
+
+	static String stripTrailingSlashes(String pattern) {
+		return pattern.replaceAll("/+$", "");
 	}
 
 	private static MemoryStrategy findStrategy(String memoryId, List<MemoryStrategy> strategies, String strategyId) {
@@ -437,6 +443,50 @@ public class AgentCoreLongTermMemoryNamespaceValidator {
 	}
 
 	private record Registration(String strategyId, String namespacePattern) {
+	}
+
+	/**
+	 * The namespace patterns that passed validation, each in the form of the memory
+	 * namespace it matched.
+	 *
+	 * @param namespacesByStrategy strategy ID to its namespace patterns, in the order
+	 * they were validated
+	 * @param reflectionNamespacesByStrategy episodic strategy ID to its reflection
+	 * namespace pattern
+	 */
+	record ValidatedPatterns(Map<String, List<String>> namespacesByStrategy,
+			Map<String, String> reflectionNamespacesByStrategy) {
+
+		static final ValidatedPatterns NONE = new ValidatedPatterns(Map.of(), Map.of());
+
+		ValidatedPatterns {
+			namespacesByStrategy = Map.copyOf(namespacesByStrategy);
+			reflectionNamespacesByStrategy = Map.copyOf(reflectionNamespacesByStrategy);
+		}
+
+		/**
+		 * The validated form of a strategy's namespace pattern. AWS gives a strategy one
+		 * namespace, so a strategy has one pattern.
+		 * @param strategyId the strategy ID
+		 * @param configured the configured pattern, returned if the strategy was not
+		 * validated
+		 * @return the pattern to build requests with
+		 */
+		String namespacePattern(String strategyId, String configured) {
+			List<String> patterns = this.namespacesByStrategy.get(strategyId);
+			return (patterns != null && !patterns.isEmpty()) ? patterns.get(0) : configured;
+		}
+
+		/**
+		 * The validated form of an episodic strategy's reflection namespace pattern.
+		 * @param strategyId the episodic strategy ID
+		 * @param configured the configured pattern, returned if it was not validated
+		 * @return the pattern to build reflection requests with
+		 */
+		String reflectionNamespacePattern(String strategyId, String configured) {
+			return this.reflectionNamespacesByStrategy.getOrDefault(strategyId, configured);
+		}
+
 	}
 
 }

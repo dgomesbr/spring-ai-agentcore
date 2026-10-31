@@ -18,7 +18,6 @@ package org.springaicommunity.agentcore.memory.longterm;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,14 +40,6 @@ import software.amazon.awssdk.services.bedrockagentcore.model.SearchCriteria;
  * are therefore filtered client-side to records whose namespace equals the requested
  * namespace or lies beneath it at a {@code /} boundary.
  *
- * <p>
- * AgentCore Memory stores namespaces as written in the strategy's template, with or
- * without a trailing {@code /}. When startup validation saw the memory namespace that a
- * pattern matches, requests for that pattern follow its trailing slash. For a memory
- * whose namespaces end with {@code /}, the prefix match then stops at a segment boundary,
- * and the records of other actors do not use up {@code topK} before the filter drops
- * them.
- *
  * @author Yuriy Bezsonov
  */
 public class AgentCoreLongTermMemoryRetriever {
@@ -69,25 +60,9 @@ public class AgentCoreLongTermMemoryRetriever {
 
 	private final String memoryId;
 
-	private final Map<NamespaceKey, Boolean> trailingSlashes;
-
 	public AgentCoreLongTermMemoryRetriever(BedrockAgentCoreClient client, String memoryId) {
-		this(client, memoryId, Map.of());
-	}
-
-	/**
-	 * Creates a retriever whose request namespaces follow the trailing slash of the
-	 * memory namespaces that startup validation matched.
-	 * @param client the AgentCore client
-	 * @param memoryId the memory resource ID
-	 * @param trailingSlashes for each validated strategy ID and pattern, whether the
-	 * matching memory namespace ends with {@code /}
-	 */
-	AgentCoreLongTermMemoryRetriever(BedrockAgentCoreClient client, String memoryId,
-			Map<NamespaceKey, Boolean> trailingSlashes) {
 		this.client = client;
 		this.memoryId = memoryId;
-		this.trailingSlashes = Map.copyOf(trailingSlashes);
 		logger.info("AgentCoreLongTermMemoryRetriever initialized with memoryId: {}", memoryId);
 	}
 
@@ -103,7 +78,8 @@ public class AgentCoreLongTermMemoryRetriever {
 	 */
 	public List<MemoryRecord> searchMemories(String strategyId, String actorId, String sessionId, String query,
 			int topK, String namespacePattern) {
-		String namespace = this.requestNamespace(namespacePattern, strategyId, actorId, sessionId);
+		String namespace = AgentCoreLongTermMemoryNamespace.buildNamespace(namespacePattern, strategyId, actorId,
+				sessionId);
 		return this.doSearch(namespace, strategyId, query, topK);
 	}
 
@@ -149,7 +125,8 @@ public class AgentCoreLongTermMemoryRetriever {
 	 */
 	public List<MemoryRecord> listMemories(String strategyId, String actorId, String sessionId,
 			String namespacePattern) {
-		String namespace = this.requestNamespace(namespacePattern, strategyId, actorId, sessionId);
+		String namespace = AgentCoreLongTermMemoryNamespace.buildNamespace(namespacePattern, strategyId, actorId,
+				sessionId);
 		logger.debug("Listing memories: namespace={}", namespace);
 
 		try {
@@ -233,27 +210,6 @@ public class AgentCoreLongTermMemoryRetriever {
 	}
 
 	/**
-	 * Resolves the namespace pattern. If validation matched the pattern to a memory
-	 * namespace, the result ends with {@code /} exactly when that namespace does:
-	 * AgentCore Memory stores namespaces as written in the template, and a request with a
-	 * different trailing slash matches nothing. Otherwise the resolved namespace is sent
-	 * as is.
-	 * @param pattern the namespace pattern
-	 * @param strategyId the memory strategy id
-	 * @param actorId the actor id
-	 * @param sessionId the session id, or {@code null} if the pattern has none
-	 * @return the namespace to send to AgentCore Memory
-	 */
-	private String requestNamespace(String pattern, String strategyId, String actorId, String sessionId) {
-		String namespace = AgentCoreLongTermMemoryNamespace.buildNamespace(pattern, strategyId, actorId, sessionId);
-		Boolean trailingSlash = this.trailingSlashes.get(new NamespaceKey(strategyId, pattern));
-		if (trailingSlash == null || trailingSlash == namespace.endsWith("/")) {
-			return namespace;
-		}
-		return (trailingSlash) ? namespace + "/" : namespace.substring(0, namespace.length() - 1);
-	}
-
-	/**
 	 * Whether any of the record's namespaces is the requested namespace or a descendant
 	 * of it. Records without namespaces are rejected.
 	 * @param summary the memory record returned by the service
@@ -271,15 +227,6 @@ public class AgentCoreLongTermMemoryRetriever {
 	}
 
 	public record MemoryRecord(String id, String content, double score) {
-	}
-
-	/**
-	 * A strategy ID with one of its namespace patterns, as validated at startup.
-	 *
-	 * @param strategyId the memory strategy ID
-	 * @param pattern the namespace pattern
-	 */
-	record NamespaceKey(String strategyId, String pattern) {
 	}
 
 }

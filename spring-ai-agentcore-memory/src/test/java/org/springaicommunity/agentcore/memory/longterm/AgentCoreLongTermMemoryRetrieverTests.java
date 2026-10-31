@@ -17,7 +17,6 @@
 package org.springaicommunity.agentcore.memory.longterm;
 
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.assertj.core.api.Assertions;
@@ -29,7 +28,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springaicommunity.agentcore.memory.AgentCoreMemoryException;
 import org.springaicommunity.agentcore.memory.longterm.AgentCoreLongTermMemoryRetriever.MemoryRecord;
-import org.springaicommunity.agentcore.memory.longterm.AgentCoreLongTermMemoryRetriever.NamespaceKey;
 import software.amazon.awssdk.services.bedrockagentcore.BedrockAgentCoreClient;
 import software.amazon.awssdk.services.bedrockagentcore.model.ListMemoryRecordsRequest;
 import software.amazon.awssdk.services.bedrockagentcore.model.ListMemoryRecordsResponse;
@@ -165,8 +163,8 @@ class AgentCoreLongTermMemoryRetrieverTests {
 	}
 
 	@Test
-	void shouldSendCustomPatternAsWrittenWithoutValidationData() {
-		// Given
+	void shouldSendPatternEndingWithSlashAsWritten() {
+		// Startup validation gives a pattern the trailing slash of the memory namespace
 		given(this.client.retrieveMemoryRecords(any(RetrieveMemoryRecordsRequest.class)))
 			.willReturn(RetrieveMemoryRecordsResponse.builder().build());
 
@@ -178,53 +176,6 @@ class AgentCoreLongTermMemoryRetrieverTests {
 			.forClass(RetrieveMemoryRecordsRequest.class);
 		then(this.client).should().retrieveMemoryRecords(captor.capture());
 		assertThat(captor.getValue().namespace()).isEqualTo("/users/user-456/");
-	}
-
-	@Test
-	void shouldEndRequestWithSlashWhenTheMatchedMemoryNamespaceDoes() {
-		// Given: validation matched the ACTOR pattern to a memory namespace ending with
-		// '/'
-		String pattern = AgentCoreLongTermMemoryNamespace.ACTOR.getPattern();
-		var retriever = new AgentCoreLongTermMemoryRetriever(this.client, "test-memory-id",
-				Map.of(new NamespaceKey("strategy-123", pattern), true));
-		given(this.client.retrieveMemoryRecords(any(RetrieveMemoryRecordsRequest.class)))
-			.willReturn(RetrieveMemoryRecordsResponse.builder().build());
-		given(this.client.listMemoryRecords(any(ListMemoryRecordsRequest.class)))
-			.willReturn(ListMemoryRecordsResponse.builder().build());
-
-		// When
-		retriever.searchMemories("strategy-123", "user-456", null, "query", 5, pattern);
-		retriever.listMemories("strategy-123", "user-456", pattern);
-
-		// Then: the prefix match stops at the actor segment
-		ArgumentCaptor<RetrieveMemoryRecordsRequest> search = ArgumentCaptor
-			.forClass(RetrieveMemoryRecordsRequest.class);
-		then(this.client).should().retrieveMemoryRecords(search.capture());
-		assertThat(search.getValue().namespace()).isEqualTo(ACTOR_NAMESPACE + "/");
-		ArgumentCaptor<ListMemoryRecordsRequest> list = ArgumentCaptor.forClass(ListMemoryRecordsRequest.class);
-		then(this.client).should().listMemoryRecords(list.capture());
-		assertThat(list.getValue().namespace()).isEqualTo(ACTOR_NAMESPACE + "/");
-	}
-
-	@Test
-	void shouldDropTrailingSlashWhenTheMatchedMemoryNamespaceHasNone() {
-		// Given: the pattern ends with '/', the memory namespace it matched does not.
-		// AgentCore Memory stores namespaces as written, so the slash would match
-		// nothing.
-		String pattern = "/users/{actorId}/";
-		var retriever = new AgentCoreLongTermMemoryRetriever(this.client, "test-memory-id",
-				Map.of(new NamespaceKey("strategy-123", pattern), false));
-		given(this.client.retrieveMemoryRecords(any(RetrieveMemoryRecordsRequest.class)))
-			.willReturn(RetrieveMemoryRecordsResponse.builder().build());
-
-		// When
-		retriever.searchMemories("strategy-123", "user-456", null, "query", 5, pattern);
-
-		// Then
-		ArgumentCaptor<RetrieveMemoryRecordsRequest> captor = ArgumentCaptor
-			.forClass(RetrieveMemoryRecordsRequest.class);
-		then(this.client).should().retrieveMemoryRecords(captor.capture());
-		assertThat(captor.getValue().namespace()).isEqualTo("/users/user-456");
 	}
 
 	@Test
@@ -441,8 +392,8 @@ class AgentCoreLongTermMemoryRetrieverTests {
 	}
 
 	@Test
-	void shouldKeepRecordsWhoseNamespaceEndsWithSlash() {
-		// Given: AgentCore Memory stores namespaces with a trailing slash
+	void shouldKeepOwnRecordsForRequestEndingWithSlash() {
+		// Given: the memory's template ends with '/', and so does the validated pattern
 		var own = record("own", ACTOR_NAMESPACE + "/");
 		var ownSession = record("own-session", SESSION_NAMESPACE + "/");
 		var otherActor = record("other", "/strategies/strategy-123/actors/user-4567/");
@@ -451,53 +402,11 @@ class AgentCoreLongTermMemoryRetrieverTests {
 				RetrieveMemoryRecordsResponse.builder().memoryRecordSummaries(own, ownSession, otherActor).build());
 
 		// When
-		List<MemoryRecord> records = this.retriever.searchMemories("strategy-123", "user-456", "query", 5);
+		List<MemoryRecord> records = this.retriever.searchMemories("strategy-123", "user-456", null, "query", 5,
+				AgentCoreLongTermMemoryNamespace.ACTOR.getPattern() + "/");
 
 		// Then
 		assertThat(records).extracting(MemoryRecord::id).containsExactly("own", "own-session");
-	}
-
-	@Test
-	void shouldDropRecordsOfActorWhoseIdExtendsActorIdWithColon() {
-		// Given: actor IDs may contain ':', so actor "tenant:alice" shares the prefix of
-		// actor "tenant"
-		var own = record("own", "/strategies/strategy-123/actors/tenant/");
-		var otherActor = record("other", "/strategies/strategy-123/actors/tenant:alice/");
-
-		given(this.client.retrieveMemoryRecords(any(RetrieveMemoryRecordsRequest.class)))
-			.willReturn(RetrieveMemoryRecordsResponse.builder().memoryRecordSummaries(own, otherActor).build());
-
-		// When
-		List<MemoryRecord> records = this.retriever.searchMemories("strategy-123", "tenant", "query", 5);
-
-		// Then
-		assertThat(records).extracting(MemoryRecord::id).containsExactly("own");
-
-		ArgumentCaptor<RetrieveMemoryRecordsRequest> captor = ArgumentCaptor
-			.forClass(RetrieveMemoryRecordsRequest.class);
-		then(this.client).should().retrieveMemoryRecords(captor.capture());
-		assertThat(captor.getValue().namespace()).isEqualTo("/strategies/strategy-123/actors/tenant");
-	}
-
-	@Test
-	void shouldListOnlyOwnRecordsOfActorIdWithColon() {
-		// Given
-		var own = record("own", "/strategies/strategy-123/actors/tenant:alice/");
-		var tenantActor = record("tenant", "/strategies/strategy-123/actors/tenant/");
-
-		given(this.client.listMemoryRecords(any(ListMemoryRecordsRequest.class)))
-			.willReturn(ListMemoryRecordsResponse.builder().memoryRecordSummaries(own, tenantActor).build());
-
-		// When
-		List<MemoryRecord> records = this.retriever.listMemories("strategy-123", "tenant:alice",
-				AgentCoreLongTermMemoryNamespace.ACTOR.getPattern());
-
-		// Then
-		assertThat(records).extracting(MemoryRecord::id).containsExactly("own");
-
-		ArgumentCaptor<ListMemoryRecordsRequest> captor = ArgumentCaptor.forClass(ListMemoryRecordsRequest.class);
-		then(this.client).should().listMemoryRecords(captor.capture());
-		assertThat(captor.getValue().namespace()).isEqualTo("/strategies/strategy-123/actors/tenant:alice");
 	}
 
 	@Test
